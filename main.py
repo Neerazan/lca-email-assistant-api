@@ -1,6 +1,7 @@
-def main():
-    print("Hello from lca-email-assistant!")
+from fastapi import FastAPI
 
+app = FastAPI(title="LCA Email Assistant")
 
-if __name__ == "__main__":
-    main()
+@app.get("/")
+def read_root():
+    return {"message": "Hello from LCA Email Assistant!"}
