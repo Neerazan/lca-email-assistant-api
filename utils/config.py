@@ -14,11 +14,15 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
 
+    OPENAI_API_KEY: str
+    TAVILY_API_KEY: str
+
     SECRET_KEY: str
     ENCRYPTION_KEY: str  # Used for Fernet encryption of refresh tokens
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60         # 60 minutes
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 7 days
+
     class Config:
         env_file = ".env"
 
