@@ -64,3 +64,26 @@ async def refresh_google_access_token(refresh_token: str) -> dict:
         raise ValueError(f"Failed to refresh token: {resp.text}")
 
     return resp.json()
+
+
+async def exchange_auth_code(code: str, redirect_uri: str = "postmessage") -> dict:
+    """
+    Exchange the authorization code for Google access, refresh, and ID tokens.
+    Uses "postmessage" for redirect_uri when using the @react-oauth/google "auth-code" popup flow.
+    """
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": settings.GOOGLE_CLIENT_ID,
+                "client_secret": settings.GOOGLE_CLIENT_SECRET,
+                "code": code,
+                "grant_type": "authorization_code",
+                "redirect_uri": redirect_uri,
+            },
+        )
+
+    if resp.status_code != 200:
+        raise ValueError(f"Failed to exchange auth code: {resp.text}")
+
+    return resp.json()

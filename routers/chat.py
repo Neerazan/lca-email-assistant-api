@@ -3,11 +3,12 @@ from fastapi import APIRouter
 router = APIRouter()
 
 
-@router.post("/")
-def chat():
-    return {"message": "Chat endpoint - coming soon"}
+@router.post("/stream")
+async def chat_stream():
+    return {"message": "Chat streaming coming soon"}
 
 
 @router.get("/sessions")
 def get_sessions():
-    return {"message": "Sessions endpoint - coming soon"}
+    return []
+
