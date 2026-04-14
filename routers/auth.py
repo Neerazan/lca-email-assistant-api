@@ -16,7 +16,11 @@ from pydantic import BaseModel
 from services.supabase import upsert_user, save_user_tokens
 from utils.google_auth import verify_google_id_token, exchange_auth_code
 from utils.encryption import encrypt_token
-from utils.security import create_access_token, create_refresh_token, verify_refresh_token
+from utils.security import (
+    create_access_token,
+    create_refresh_token,
+    verify_refresh_token,
+)
 from utils.config import settings
 
 router = APIRouter()
@@ -33,7 +37,9 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
     """
     try:
         # 1. Exchange the code with Google
-        google_tokens = await exchange_auth_code(payload.code, redirect_uri="postmessage")
+        google_tokens = await exchange_auth_code(
+            payload.code, redirect_uri="postmessage"
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -63,14 +69,13 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
     except Exception as e:
         print(f"Database error during upsert_user: {e}")
         raise HTTPException(
-            status_code=500,
-            detail="Database error during user creation."
+            status_code=500, detail="Database error during user creation."
         )
 
     # 4. Encrypt and store Google tokens
     google_refresh = google_tokens.get("refresh_token")
     google_access = google_tokens.get("access_token")
-    
+
     # We only overwrite the refresh token if Google actually gave us one this time
     try:
         if google_refresh:
@@ -85,7 +90,7 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
             save_user_tokens(
                 google_id=google_id,
                 access_token=google_access,
-                refresh_token_encrypted=None, # Supabase update should ideally handle partial updates, but currently save_user_tokens requires both. 
+                refresh_token_encrypted=None,  # Supabase update should ideally handle partial updates, but currently save_user_tokens requires both.
                 # Assuming save_user_tokens handles None by not overwriting, but if not we should fix save_user_tokens. Let's pass None.
             )
     except Exception as e:
@@ -101,7 +106,7 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
         key="app_refresh_token",
         value=app_refresh_token,
         httponly=True,
-        secure=True, # Should be True in prod (HTTPS only)
+        secure=False,  # False for localhost HTTP; use True in production with HTTPS
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
     )
@@ -121,7 +126,7 @@ def refresh_token(request: Request, response: Response):
     try:
         # Verify the refresh token
         payload = verify_refresh_token(refresh_token)
-        
+
         google_id = payload.get("sub")
         email = payload.get("email")
         if not google_id or not email:
@@ -129,7 +134,7 @@ def refresh_token(request: Request, response: Response):
 
         # Issue a new access token
         new_access_token = create_access_token(data={"sub": google_id, "email": email})
-        
+
         return {"access_token": new_access_token}
     except Exception:
         # If token is invalid/expired, clear the cookie

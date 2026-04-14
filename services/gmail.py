@@ -5,7 +5,58 @@ from langchain_google_community.gmail.utils import build_resource_service
 from services.supabase import get_user_tokens
 from utils.config import settings
 from utils.encryption import decrypt_token
+import base64
 
+import re
+
+def clean_html(raw_html: str) -> str:
+    # Remove styles and scripts
+    cleaner = re.compile('<style.*?>.*?</style>', re.IGNORECASE | re.DOTALL)
+    text = re.sub(cleaner, '', raw_html)
+    cleaner = re.compile('<script.*?>.*?</script>', re.IGNORECASE | re.DOTALL)
+    text = re.sub(cleaner, '', text)
+    # Remove HTML tags
+    cleaner = re.compile('<.*?>')
+    text = re.sub(cleaner, ' ', text)
+    # Replace multiple spaces/newlines
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n\s*\n', '\n', text)
+    return text.strip()
+
+def extract_email_body(payload: dict) -> str:
+    """Recursively parse the body to extract text/plain or fallback to cleaned text/html."""
+    mime_type = payload.get("mimeType")
+    
+    if mime_type == "text/plain":
+        data = payload.get("body", {}).get("data")
+        if data:
+            return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+            
+    if "parts" in payload:
+        text_body = ""
+        html_body = ""
+        for part in payload["parts"]:
+            body_part = extract_email_body(part)
+            if part.get("mimeType") == "text/plain":
+                text_body += body_part
+            elif part.get("mimeType") == "text/html":
+                html_body += body_part
+            elif part.get("mimeType", "").startswith("multipart/"):
+                text_body += body_part
+        return text_body if text_body else clean_html(html_body)
+
+    if mime_type == "text/html":
+        data = payload.get("body", {}).get("data")
+        if data:
+            raw_html = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+            return clean_html(raw_html)
+            
+    if "body" in payload and "data" in payload["body"]:
+        data = payload["body"]["data"]
+        raw = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
+        return clean_html(raw) if "<html" in raw.lower() or "<body" in raw.lower() else raw
+
+    return ""
 
 def get_user_credentials(google_id: str) -> Credentials:
     """
@@ -75,7 +126,7 @@ class GmailService:
 
         return messages, next_page_token, result_size
 
-    def get_email_details(self, msg_id: str, format: str = "metadata"):
+    def get_email_details(self, msg_id: str, format: str = "full"):
         """format options: 'metadata', 'full', 'raw', 'minimal'"""
         msg = (
             self.api_resource.users()
@@ -84,12 +135,12 @@ class GmailService:
                 userId="me",
                 id=msg_id,
                 format=format,
-                metadataHeaders=["From", "To", "Subject", "Date"],
             )
             .execute()
         )
 
         headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
+        body = extract_email_body(msg["payload"])
 
         return {
             "id": msg["id"],
@@ -100,6 +151,7 @@ class GmailService:
             "subject": headers.get("Subject"),
             "date": headers.get("Date"),
             "labels": msg.get("labelIds", []),
+            "body": body,
         }
 
     def list_emails_paginated(
@@ -111,6 +163,9 @@ class GmailService:
         """Fetch a specific page of results."""
         messages, next_token, total = self.list_emails(query=query, max_results=page_size)
         current_page = 1
+        # print("Messages: ", messages)
+        # print("next_token: ", next_token)
+        # print("Total: ", total)
 
         # Advance through pages until we reach the desired page
         while current_page < page and next_token:

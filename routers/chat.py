@@ -1,31 +1,34 @@
-from starlette import middleware
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel
 from utils.config import settings
 import json
 
+from agent.tools import list_user_emails, get_user_email_details
+
 router = APIRouter()
-
-
-# ── Simple test tool ──────────────────────────────────────────────
-@tool
-def get_weather(place: str) -> str:
-    """Return the weather status of any place or city."""
-    return f"Currently the weather of {place} is sunny and 25°C."
 
 
 # ── Build a lightweight ReAct agent ──────────────────────────────
 llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
 
+# Use our new tools along with the test tool
 agent = create_react_agent(
     model=llm,
-    tools=[get_weather],
-    prompt="You are a general chatbot. You can also fetch weather information using your tool.",
+    tools=[list_user_emails, get_user_email_details],
+    prompt=(
+        "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
+        "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
+        "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
+        "yourself to the snippet. Extract and display the most important information if the text is huge, "
+        "but prioritize showing the actual contents of the email body rather than just a View Link."
+    ),
+    checkpointer=InMemorySaver(),
 )
 
 
@@ -36,16 +39,23 @@ class ChatRequest(BaseModel):
 
 # ── Streaming endpoint ───────────────────────────────────────────
 @router.post("/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(req: ChatRequest, request: Request):
     """
     Streams the agent's response token-by-token as Server-Sent Events (SSE).
     Only AI text tokens are forwarded; tool calls are handled silently.
     """
 
+    # Extract the authenticated user's google_id from the request state
+    user_payload = getattr(request.state, "user", None)
+    google_id = user_payload.get("sub") if user_payload else None
+
     async def event_generator():
         inputs = {"messages": [HumanMessage(content=req.message)]}
 
-        async for event in agent.astream_events(inputs, version="v2"):
+        # Inject the google_id into the LangChain RunnableConfig
+        config = {"configurable": {"google_id": google_id, "thread_id": "1"}}
+
+        async for event in agent.astream_events(inputs, config=config, version="v2"):
             kind = event["event"]
 
             # Stream LLM text tokens
@@ -55,7 +65,7 @@ async def chat_stream(req: ChatRequest):
 
                 if isinstance(token, str) and token:
                     yield f"data: {json.dumps({'token': token})}\n\n"
-                    
+
             # Stream tool calls
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
