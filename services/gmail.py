@@ -79,12 +79,7 @@ def get_user_credentials(google_id: str) -> Credentials:
         token_uri="https://oauth2.googleapis.com/token",
         client_id=settings.GOOGLE_CLIENT_ID,
         client_secret=settings.GOOGLE_CLIENT_SECRET,
-        scopes=[
-            "https://mail.google.com/",
-            "https://www.googleapis.com/auth/gmail.readonly",
-            "https://www.googleapis.com/auth/gmail.send",
-            "https://www.googleapis.com/auth/gmail.compose",
-        ],
+        scopes=["https://www.googleapis.com/auth/gmail.modify"],
     )
 
 

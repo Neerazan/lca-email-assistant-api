@@ -1,81 +1,117 @@
+from typing import List, Optional
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from services.gmail import GmailService
 
 
+def _get_toolkit_tool(config: RunnableConfig, tool_name: str):
+    """Helper to get a specific tool from the Gmail toolkit."""
+    google_id = config.get("configurable", {}).get("google_id")
+    if not google_id:
+        return None
+    service = GmailService(google_id)
+    toolkit = service.get_toolkit()
+    return next((t for t in toolkit.get_tools() if t.name == tool_name), None)
+
+
 @tool
-def list_user_emails(query: str, max_results: int, config: RunnableConfig) -> str:
+def search_emails(query: str, config: RunnableConfig, max_results: int = 10) -> str:
     """
-    Search and list emails from the user's Gmail account.
-    
+    Search Gmail emails using a query string.
+
     Args:
         query: Gmail search query (e.g., "is:unread", "from:boss@example.com").
-        max_results: Maximum number of emails to return (default is 10, keep it small).
+        max_results: Maximum number of emails to return (default 10).
     """
-
-    # print("Query: ", query)
-    # print("Max Results: ", max_results)
-    # print("Config: ", config)
-    google_id = config.get("configurable", {}).get("google_id")
-    if not google_id:
+    original_tool = _get_toolkit_tool(config, "search_gmail")
+    if not original_tool:
         return "Error: User is not authenticated or google_id is missing."
-        
-    try:
-        service = GmailService(google_id)
-        # Fetching paginated with full snippets
-        result = service.list_emails_paginated(query=query, page=1, page_size=max_results)
-        # print("Result: ", result)
-        
-        emails = result.get("emails", [])
-        # print("Emails: ",emails)
-        if not emails:
-            return "No emails found matching the query."
-            
-        output = [f"Found {len(emails)} emails:"]
-        for email in emails:
-            output.append(
-                f"\n--- Email ID: {email['id']} ---"
-                f"\nFrom: {email['from']}"
-                f"\nTo: {email['to']}"
-                f"\nSubject: {email['subject']}"
-                f"\nDate: {email['date']}"
-                f"\nSnippet: {email['snippet']}..."
-                f"\nBody:\n{email.get('body', 'No body content available.')}"
-            )
-        
-        # print("OutPut: ", output)
-            
-        return "\n".join(output)
-        
-    except Exception as e:
-        return f"Error fetching emails: {str(e)}"
+    return original_tool.invoke({"query": query, "max_results": max_results})
+
 
 @tool
-def get_user_email_details(msg_id: str, config: RunnableConfig) -> str:
+def get_email(message_id: str, config: RunnableConfig) -> str:
     """
-    Get full metadata details of a specific email by its message ID.
-    
-    Args:
-        msg_id: The exact ID of the email to retrieve details for.
-    """
-    google_id = config.get("configurable", {}).get("google_id")
-    if not google_id:
-        return "Error: User is not authenticated."
+    Get a specific email message by its ID.
 
-    try:
-        service = GmailService(google_id)
-        email = service.get_email_details(msg_id=msg_id, format="full")
-        
-        output = (
-            f"--- Email ID: {email['id']} ---\n"
-            f"From: {email['from']}\n"
-            f"To: {email['to']}\n"
-            f"Subject: {email['subject']}\n"
-            f"Date: {email['date']}\n"
-            f"Thread ID: {email['thread_id']}\n"
-            f"Snippet: {email['snippet']}\n"
-            f"Body:\n{email.get('body', 'No body content available.')}\n"
-        )
-        return output
-    except Exception as e:
-        return f"Error retrieving email details: {str(e)}"
+    Args:
+        message_id: The unique ID of the email message to retrieve.
+    """
+    original_tool = _get_toolkit_tool(config, "get_gmail_message")
+    if not original_tool:
+        return "Error: User is not authenticated or google_id is missing."
+    return original_tool.invoke({"message_id": message_id})
+
+
+@tool
+def get_thread(thread_id: str, config: RunnableConfig) -> str:
+    """
+    Get a specific email thread by its thread ID.
+
+    Args:
+        thread_id: The unique ID of the email thread to retrieve.
+    """
+    original_tool = _get_toolkit_tool(config, "get_gmail_thread")
+    if not original_tool:
+        return "Error: User is not authenticated or google_id is missing."
+    return original_tool.invoke({"thread_id": thread_id})
+
+
+@tool
+def send_email(
+    message: str,
+    to: str,
+    subject: str,
+    config: RunnableConfig,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+) -> str:
+    """
+    Send an email message.
+
+    Args:
+        message: The body/content of the email to send.
+        to: The recipient's email address.
+        subject: The subject line of the email.
+        cc: Optional list of CC recipients.
+        bcc: Optional list of BCC recipients.
+    """
+    original_tool = _get_toolkit_tool(config, "send_gmail_message")
+    if not original_tool:
+        return "Error: User is not authenticated or google_id is missing."
+    args = {"message": message, "to": [to], "subject": subject}
+    if cc:
+        args["cc"] = cc
+    if bcc:
+        args["bcc"] = bcc
+    return original_tool.invoke(args)
+
+
+@tool
+def create_draft(
+    message: str,
+    to: str,
+    subject: str,
+    config: RunnableConfig,
+    cc: Optional[List[str]] = None,
+    bcc: Optional[List[str]] = None,
+) -> str:
+    """
+    Create a draft email.
+
+    Args:
+        message: The body/content of the draft email.
+        to: The recipient's email address.
+        subject: The subject line of the draft.
+        cc: Optional list of CC recipients.
+        bcc: Optional list of BCC recipients.
+    """
+    original_tool = _get_toolkit_tool(config, "create_gmail_draft")
+    if not original_tool:
+        return "Error: User is not authenticated or google_id is missing."
+    args = {"message": message, "to": [to], "subject": subject}
+    if cc:
+        args["cc"] = cc
+    if bcc:
+        args["bcc"] = bcc
+    return original_tool.invoke(args)

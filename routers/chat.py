@@ -1,29 +1,27 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
-from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel
 from utils.config import settings
-from services.gmail import GmailService
 import json
 
-from agent.tools import list_user_emails, get_user_email_details
+from agent.tools import search_emails, get_email, get_thread, send_email, create_draft
 
 router = APIRouter()
 
 
-class ThreadSafeChatOpenAI(ChatOpenAI):
-    def bind_tools(self, tools, **kwargs):
-        # Disable parallel tool calls to prevent google-api-python-client 
-        # from sharing an insecure httplib2 socket connection across threads.
-        kwargs["parallel_tool_calls"] = False
-        return super().bind_tools(tools, **kwargs)
+# class ThreadSafeChatOpenAI(ChatOpenAI):
+#     def bind_tools(self, tools, **kwargs):
+#         # Disable parallel tool calls to prevent google-api-python-client 
+#         # from sharing an insecure httplib2 socket connection across threads.
+#         kwargs["parallel_tool_calls"] = False
+#         return super().bind_tools(tools, **kwargs)
 
 # ── Build a lightweight ReAct agent ──────────────────────────────
-llm = ThreadSafeChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
+llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
 
 memory = InMemorySaver()
 
@@ -47,13 +45,12 @@ async def chat_stream(req: ChatRequest, request: Request):
     if not google_id:
         pass
 
-    service = GmailService(google_id=google_id)
-    gmail_tools = service.get_toolkit().get_tools()
+    tools = [search_emails, get_email, get_thread, send_email, create_draft]
 
-    # Use our new tools along with the test tool
+    # Use our custom @tool wrappers around the Gmail toolkit
     agent = create_react_agent(
         model=llm,
-        tools=gmail_tools,
+        tools=tools,
         prompt=(
             "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
             "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
