@@ -7,6 +7,7 @@ from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel
 from utils.config import settings
+from services.gmail import GmailService
 import json
 
 from agent.tools import list_user_emails, get_user_email_details
@@ -14,23 +15,17 @@ from agent.tools import list_user_emails, get_user_email_details
 router = APIRouter()
 
 
+class ThreadSafeChatOpenAI(ChatOpenAI):
+    def bind_tools(self, tools, **kwargs):
+        # Disable parallel tool calls to prevent google-api-python-client 
+        # from sharing an insecure httplib2 socket connection across threads.
+        kwargs["parallel_tool_calls"] = False
+        return super().bind_tools(tools, **kwargs)
+
 # ── Build a lightweight ReAct agent ──────────────────────────────
-llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
+llm = ThreadSafeChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
 
-# Use our new tools along with the test tool
-agent = create_react_agent(
-    model=llm,
-    tools=[list_user_emails, get_user_email_details],
-    prompt=(
-        "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
-        "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
-        "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
-        "yourself to the snippet. Extract and display the most important information if the text is huge, "
-        "but prioritize showing the actual contents of the email body rather than just a View Link."
-    ),
-    checkpointer=InMemorySaver(),
-)
-
+memory = InMemorySaver()
 
 # ── Request body ─────────────────────────────────────────────────
 class ChatRequest(BaseModel):
@@ -48,6 +43,26 @@ async def chat_stream(req: ChatRequest, request: Request):
     # Extract the authenticated user's google_id from the request state
     user_payload = getattr(request.state, "user", None)
     google_id = user_payload.get("sub") if user_payload else None
+
+    if not google_id:
+        pass
+
+    service = GmailService(google_id=google_id)
+    gmail_tools = service.get_toolkit().get_tools()
+
+    # Use our new tools along with the test tool
+    agent = create_react_agent(
+        model=llm,
+        tools=gmail_tools,
+        prompt=(
+            "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
+            "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
+            "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
+            "yourself to the snippet. Extract and display the most important information if the text is huge, "
+            "but prioritize showing the actual contents of the email body rather than just a View Link."
+        ),
+        checkpointer=memory
+    )
 
     async def event_generator():
         inputs = {"messages": [HumanMessage(content=req.message)]}

@@ -1,6 +1,6 @@
 from google.oauth2.credentials import Credentials
 from langchain_google_community import GmailToolkit
-from langchain_google_community.gmail.utils import build_resource_service
+from langchain_google_community.gmail.utils import build_gmail_service
 
 from services.supabase import get_user_tokens
 from utils.config import settings
@@ -83,6 +83,7 @@ def get_user_credentials(google_id: str) -> Credentials:
             "https://mail.google.com/",
             "https://www.googleapis.com/auth/gmail.readonly",
             "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/gmail.compose",
         ],
     )
 
@@ -94,7 +95,8 @@ class GmailService:
     def __init__(self, google_id: str):
         self.google_id = google_id
         self.credentials = get_user_credentials(google_id)
-        self.api_resource = build_resource_service(credentials=self.credentials)
+        # Using build_gmail_service instead of build_resource_service (deprecated)
+        self.api_resource = build_gmail_service(credentials=self.credentials)
 
     def get_toolkit(self) -> GmailToolkit:
         """Returns a LangChain GmailToolkit for this user."""

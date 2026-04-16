@@ -50,7 +50,6 @@ def list_user_emails(query: str, max_results: int, config: RunnableConfig) -> st
     except Exception as e:
         return f"Error fetching emails: {str(e)}"
 
-
 @tool
 def get_user_email_details(msg_id: str, config: RunnableConfig) -> str:
     """
