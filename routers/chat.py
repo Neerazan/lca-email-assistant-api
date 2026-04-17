@@ -2,8 +2,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 from langgraph.checkpoint.memory import InMemorySaver
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 from pydantic import BaseModel
 from utils.config import settings
 import json
@@ -13,24 +14,28 @@ from agent.tools import search_emails, get_email, get_thread, send_email, create
 router = APIRouter()
 
 
-# class ThreadSafeChatOpenAI(ChatOpenAI):
-#     def bind_tools(self, tools, **kwargs):
-#         # Disable parallel tool calls to prevent google-api-python-client 
-#         # from sharing an insecure httplib2 socket connection across threads.
-#         kwargs["parallel_tool_calls"] = False
-#         return super().bind_tools(tools, **kwargs)
-
-# ── Build a lightweight ReAct agent ──────────────────────────────
 llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
-
 memory = InMemorySaver()
+tools = [search_emails, get_email, get_thread, send_email, create_draft]
 
-# ── Request body ─────────────────────────────────────────────────
+agent = create_agent(
+    model=llm,
+    tools=tools,
+    system_prompt=(
+        "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
+        "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
+        "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
+        "yourself to the snippet. Extract and display the most important information if the text is huge, "
+        "but prioritize showing the actual contents of the email body rather than just a View Link."
+    ),
+    checkpointer=memory,
+)
+
+
 class ChatRequest(BaseModel):
     message: str
 
 
-# ── Streaming endpoint ───────────────────────────────────────────
 @router.post("/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     """
@@ -38,28 +43,12 @@ async def chat_stream(req: ChatRequest, request: Request):
     Only AI text tokens are forwarded; tool calls are handled silently.
     """
 
-    # Extract the authenticated user's google_id from the request state
     user_payload = getattr(request.state, "user", None)
     google_id = user_payload.get("sub") if user_payload else None
 
     if not google_id:
         pass
 
-    tools = [search_emails, get_email, get_thread, send_email, create_draft]
-
-    # Use our custom @tool wrappers around the Gmail toolkit
-    agent = create_react_agent(
-        model=llm,
-        tools=tools,
-        prompt=(
-            "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
-            "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
-            "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
-            "yourself to the snippet. Extract and display the most important information if the text is huge, "
-            "but prioritize showing the actual contents of the email body rather than just a View Link."
-        ),
-        checkpointer=memory
-    )
 
     async def event_generator():
         inputs = {"messages": [HumanMessage(content=req.message)]}
@@ -89,7 +78,6 @@ async def chat_stream(req: ChatRequest, request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# ── Placeholder for session management ───────────────────────────
 @router.get("/sessions")
 def get_sessions():
     return []
