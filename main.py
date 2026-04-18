@@ -1,10 +1,24 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from middlewares.auth import AuthMiddleware
 from routers import auth, chat
 from utils.config import settings
 
-app = FastAPI(title="AI Email Assistant", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Run setup tasks before the app starts serving requests."""
+    # Open the connection pool and create checkpoint tables in PostgreSQL
+    await chat.pool.open()
+    await chat.checkpointer.setup()
+    print("[INFO] PostgresSaver checkpoint tables ready")
+    yield
+    # Cleanup: close the connection pool
+    await chat.pool.close()
+
+
+app = FastAPI(title="AI Email Assistant", version="1.0.0", lifespan=lifespan)
 
 # Note: Middlewares are executed in reverse order of how they are added.
 # If we add CORS last, it executes first on incoming requests.

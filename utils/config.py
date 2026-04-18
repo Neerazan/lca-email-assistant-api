@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
+    SUPABASE_DB_URL: str  # Direct PostgreSQL connection string for LangGraph checkpointer
 
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str

@@ -140,6 +140,24 @@ def get_user_sessions(user_id: str):
     )
     return response.data
 
+def delete_chat_session(session_id: str):
+    response = (
+        supabase.table("chat_sessions")
+        .delete()
+        .eq("id", session_id)
+        .execute()
+    )
+    return response.data
+
+def update_chat_session_title(session_id: str, title: str):
+    response = (
+        supabase.table("chat_sessions")
+        .update({"title": title})
+        .eq("id", session_id)
+        .execute()
+    )
+    return response.data
+
 
 # ---------------------------------------------------------------------------
 # Chat message operations

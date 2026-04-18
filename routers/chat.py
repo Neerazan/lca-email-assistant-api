@@ -1,9 +1,10 @@
+from services.supabase import get_user_by_google_id, create_chat_session, get_user_sessions, save_message, get_session_messages, update_chat_session_title, delete_chat_session
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from pydantic import BaseModel
@@ -16,8 +17,21 @@ router = APIRouter()
 
 
 llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
-memory = InMemorySaver()
 tools = [search_emails, get_email, get_thread, send_email, create_draft]
+
+# Persistent checkpointer — stores LangGraph state in Supabase PostgreSQL.
+# Pool is opened and setup() called in main.py lifespan.
+from psycopg_pool import AsyncConnectionPool
+
+pool = AsyncConnectionPool(
+    conninfo=settings.SUPABASE_DB_URL,
+    kwargs={
+        "autocommit": True,
+        "prepare_threshold": None,
+    },
+    open=False,
+)
+checkpointer = AsyncPostgresSaver(pool)
 
 agent = create_agent(
     model=llm,
@@ -39,7 +53,7 @@ agent = create_agent(
             },
         )
     ],
-    checkpointer=memory,
+    checkpointer=checkpointer,
 )
 
 
@@ -99,6 +113,17 @@ async def chat_stream(req: ChatRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
+        # Save the user's message to Supabase
+        save_message(session_id=req.thread_id, role="user", content=req.message)
+
+        # Check if this is the first message in the session to update the title
+        session_msgs = get_session_messages(req.thread_id)
+        if len(session_msgs) == 1:
+            # Generate a simple title from the first message (e.g. first 5 words)
+            words = req.message.split()
+            new_title = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
+            update_chat_session_title(req.thread_id, new_title)
+
         inputs = {"messages": [HumanMessage(content=req.message)]}
         config = {
             "configurable": {
@@ -106,6 +131,8 @@ async def chat_stream(req: ChatRequest, request: Request):
                 "thread_id": req.thread_id,
             }
         }
+
+        assistant_response = ""
 
         print(f"[DEBUG] Starting astream_events for thread_id={req.thread_id}")
         async for event in agent.astream_events(inputs, config=config, version="v2"):
@@ -116,11 +143,20 @@ async def chat_stream(req: ChatRequest, request: Request):
                 chunk = event["data"]["chunk"]
                 token = chunk.content
                 if isinstance(token, str) and token:
+                    assistant_response += token
                     yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
 
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
                 yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+
+        # After streaming ends, save the full assistant response to Supabase
+        if assistant_response:
+            save_message(
+                session_id=req.thread_id,
+                role="assistant",
+                content=assistant_response,
+            )
 
         print("[DEBUG] astream_events loop finished, checking state...")
         # After streaming ends, check if the graph paused due to an interrupt
@@ -164,7 +200,9 @@ async def chat_resume(req: ResumeRequest, request: Request):
             }
         }
 
-        print(f"[DEBUG] /resume called with thread_id={req.thread_id}, decisions={req.decisions}")
+        print(
+            f"[DEBUG] /resume called with thread_id={req.thread_id}, decisions={req.decisions}"
+        )
 
         # Resume the graph with the user's decision
         command = Command(resume={"decisions": req.decisions})
@@ -202,5 +240,48 @@ async def chat_resume(req: ResumeRequest, request: Request):
 
 
 @router.get("/sessions")
-def get_sessions():
-    return []
+def get_sessions(request: Request):
+    """Returns all chat sessions for a authenticated user."""
+    user_payload = getattr(request.state, "user", None)
+    google_id = user_payload.get("sub") if user_payload else None
+    if not google_id:
+        return []
+
+    user = get_user_by_google_id(google_id=google_id)
+    if not user:
+        return []
+
+    session = get_user_sessions(user['id'])
+    return session
+
+
+@router.post("/sessions")
+async def create_session(request: Request):
+    """Create a new chat session."""
+    user_payload = getattr(request.state, "user", None)
+    google_id = user_payload.get("sub") if user_payload else None
+
+    user = get_user_by_google_id(google_id)
+    session = create_chat_session(user["id"], title="New Chat")
+    return session
+
+@router.get("/sessions/{session_id}/messages")
+async def get_messages(session_id: str, request: Request):
+    """Return all messages for a specific session."""
+    user_payload = getattr(request.state, "user", None)
+    if not user_payload:
+        return []
+        
+    messages = get_session_messages(session_id)
+    # Format messages for the frontend
+    return [{"role": msg["role"], "content": msg["content"]} for msg in messages]
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: str, request: Request):
+    """Delete a chat session."""
+    user_payload = getattr(request.state, "user", None)
+    if not user_payload:
+        return {"success": False, "error": "Unauthorized"}
+        
+    delete_chat_session(session_id)
+    return {"success": True}
