@@ -2,7 +2,7 @@ from services.supabase import get_user_by_google_id, create_chat_session, get_us
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain.agents import create_agent
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
@@ -11,13 +11,15 @@ from pydantic import BaseModel
 from utils.config import settings
 import json
 
-from agent.tools import search_emails, get_email, get_thread, send_email, create_draft
+from agent.tools import search_emails, get_email, get_thread, send_email, create_draft, save_memory_tool, delete_memory_tool
+from agent.prompt_builder import build_system_prompt
+from services.store import store
 
 router = APIRouter()
 
 
 llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
-tools = [search_emails, get_email, get_thread, send_email, create_draft]
+tools = [search_emails, get_email, get_thread, send_email, create_draft, save_memory_tool, delete_memory_tool]
 
 # Persistent checkpointer — stores LangGraph state in Supabase PostgreSQL.
 # Pool is opened and setup() called in main.py lifespan.
@@ -36,13 +38,8 @@ checkpointer = AsyncPostgresSaver(pool)
 agent = create_agent(
     model=llm,
     tools=tools,
-    system_prompt=(
-        "You are an AI Email Assistant. You can search and retrieve the user's Gmail messages. "
-        "IMPORTANT: When asked to provide details or read an email, you MUST output the FULL "
-        "content of the email body exactly as provided by the tools. Do NOT summarize it or restrict "
-        "yourself to the snippet. Extract and display the most important information if the text is huge, "
-        "but prioritize showing the actual contents of the email body rather than just a View Link."
-    ),
+    # We leave system_prompt None here and inject it dynamically in the routes
+    system_prompt=None,
     middleware=[
         HumanInTheLoopMiddleware(
             interrupt_on={
@@ -54,6 +51,7 @@ agent = create_agent(
         )
     ],
     checkpointer=checkpointer,
+    store=store
 )
 
 
@@ -124,7 +122,12 @@ async def chat_stream(req: ChatRequest, request: Request):
             new_title = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
             update_chat_session_title(req.thread_id, new_title)
 
-        inputs = {"messages": [HumanMessage(content=req.message)]}
+        # Fetch dynamic system prompt
+        user = get_user_by_google_id(google_id)
+        prompt_text = await build_system_prompt(user["id"])
+        system_message = SystemMessage(content=prompt_text, id="system_prompt")
+
+        inputs = {"messages": [system_message, HumanMessage(content=req.message)]}
         config = {
             "configurable": {
                 "google_id": google_id,
@@ -204,8 +207,16 @@ async def chat_resume(req: ResumeRequest, request: Request):
             f"[DEBUG] /resume called with thread_id={req.thread_id}, decisions={req.decisions}"
         )
 
+        # Fetch dynamic system prompt
+        user = get_user_by_google_id(google_id)
+        prompt_text = await build_system_prompt(user["id"])
+        system_message = SystemMessage(content=prompt_text, id="system_prompt")
+
         # Resume the graph with the user's decision
-        command = Command(resume={"decisions": req.decisions})
+        command = Command(
+            resume={"decisions": req.decisions},
+            update={"messages": [system_message]}
+        )
 
         async for event in agent.astream_events(
             command,

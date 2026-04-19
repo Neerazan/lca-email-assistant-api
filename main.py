@@ -2,7 +2,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from middlewares.auth import AuthMiddleware
-from routers import auth, chat
+from routers import auth, chat, preferences
+from services.store import store_pool, store
 from utils.config import settings
 
 
@@ -12,10 +13,16 @@ async def lifespan(app: FastAPI):
     # Open the connection pool and create checkpoint tables in PostgreSQL
     await chat.pool.open()
     await chat.checkpointer.setup()
-    print("[INFO] PostgresSaver checkpoint tables ready")
+    
+    # Store setup
+    await store_pool.open()
+    await store.setup()
+    
+    print("[INFO] PostgresSaver and AsyncPostgresStore ready")
     yield
     # Cleanup: close the connection pool
     await chat.pool.close()
+    await store_pool.close()
 
 
 app = FastAPI(title="AI Email Assistant", version="1.0.0", lifespan=lifespan)
@@ -36,6 +43,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(preferences.router, prefix="/preferences", tags=["preferences"])
 
 
 @app.get("/")

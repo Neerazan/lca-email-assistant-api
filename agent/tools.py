@@ -2,6 +2,9 @@ from typing import List, Optional
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from services.gmail import GmailService
+from services.store import save_memory, delete_memory
+from services.supabase import get_user_by_google_id
+import uuid
 
 
 def _get_toolkit_tool(config: RunnableConfig, tool_name: str):
@@ -115,3 +118,42 @@ def create_draft(
     if bcc:
         args["bcc"] = bcc
     return original_tool.invoke(args)
+
+
+@tool
+async def save_memory_tool(key: str, memory_fact: str, config: RunnableConfig) -> str:
+    """
+    Save a new fact about the user to their persistent AI memory.
+    
+    Args:
+        key: A short, unique, snake_case identifier for this memory (e.g., 'boss_name', 'prefers_casual_tone').
+        memory_fact: The full sentence describing what you learned about the user.
+    """
+    google_id = config.get("configurable", {}).get("google_id")
+    if not google_id:
+        return "Error: missing google_id in config"
+    user = get_user_by_google_id(google_id)
+    if not user:
+        return "Error: user not found"
+        
+    await save_memory(user["id"], key, {"memory": memory_fact})
+    return f"Successfully saved memory: {key}"
+
+
+@tool
+async def delete_memory_tool(key: str, config: RunnableConfig) -> str:
+    """
+    Delete a specific memory fact about the user from their persistent AI memory.
+    
+    Args:
+        key: The short, unique identifier of the memory to delete.
+    """
+    google_id = config.get("configurable", {}).get("google_id")
+    if not google_id:
+        return "Error: missing google_id in config"
+    user = get_user_by_google_id(google_id)
+    if not user:
+        return "Error: user not found"
+        
+    await delete_memory(user["id"], key)
+    return f"Successfully deleted memory: {key}"
