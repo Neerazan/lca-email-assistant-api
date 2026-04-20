@@ -1,24 +1,9 @@
 import os
 from langgraph.store.postgres import AsyncPostgresStore
-from psycopg_pool import AsyncConnectionPool
-from utils.config import settings
+from services.db import shared_pool
 
-# Create a dedicated pool for the store to avoid circular imports, 
-# or use a global one. For simplicity, we use a global store object here.
-
-DATABASE_URL = settings.SUPABASE_DB_URL
-
-# We'll initialize the pool and store in a way that can be managed by the FastAPI lifespan
-store_pool = AsyncConnectionPool(
-    conninfo=DATABASE_URL,
-    kwargs={
-        "autocommit": True,
-        "prepare_threshold": None,
-    },
-    open=False,
-)
-
-store = AsyncPostgresStore(store_pool)
+# Create a global store object using the shared connection pool
+store = AsyncPostgresStore(shared_pool)
 
 async def get_store() -> AsyncPostgresStore:
     return store

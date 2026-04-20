@@ -23,17 +23,9 @@ tools = [search_emails, get_email, get_thread, send_email, create_draft, save_me
 
 # Persistent checkpointer — stores LangGraph state in Supabase PostgreSQL.
 # Pool is opened and setup() called in main.py lifespan.
-from psycopg_pool import AsyncConnectionPool
+from services.db import shared_pool
 
-pool = AsyncConnectionPool(
-    conninfo=settings.SUPABASE_DB_URL,
-    kwargs={
-        "autocommit": True,
-        "prepare_threshold": None,
-    },
-    open=False,
-)
-checkpointer = AsyncPostgresSaver(pool)
+checkpointer = AsyncPostgresSaver(shared_pool)
 
 agent = create_agent(
     model=llm,

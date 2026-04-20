@@ -3,26 +3,28 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from middlewares.auth import AuthMiddleware
 from routers import auth, chat, preferences
-from services.store import store_pool, store
+from services.store import store
 from utils.config import settings
 
+
+from services.db import shared_pool
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run setup tasks before the app starts serving requests."""
-    # Open the connection pool and create checkpoint tables in PostgreSQL
-    await chat.pool.open()
+    # Open the shared connection pool
+    await shared_pool.open()
+    
+    # Create checkpoint tables in PostgreSQL
     await chat.checkpointer.setup()
     
     # Store setup
-    await store_pool.open()
     await store.setup()
     
     print("[INFO] PostgresSaver and AsyncPostgresStore ready")
     yield
-    # Cleanup: close the connection pool
-    await chat.pool.close()
-    await store_pool.close()
+    # Cleanup: close the shared connection pool
+    await shared_pool.close()
 
 
 app = FastAPI(title="AI Email Assistant", version="1.0.0", lifespan=lifespan)
