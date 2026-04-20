@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
     SUPABASE_DB_URL: str  # Direct PostgreSQL connection string for LangGraph checkpointer
+    SUPABASE_ATTACHMENTS_BUCKET: str = "chat-attachments"
 
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
@@ -23,6 +24,9 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60         # 60 minutes
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7 # 7 days
+    ATTACHMENTS_MAX_FILE_SIZE_BYTES: int = 10 * 1024 * 1024
+    ATTACHMENTS_MAX_FILES_PER_MESSAGE: int = 5
+    ATTACHMENTS_TTL_HOURS: int = 24 * 7
 
     class Config:
         env_file = ".env"

@@ -3,6 +3,7 @@
 
 DROP TABLE IF EXISTS chat_messages CASCADE;
 DROP TABLE IF EXISTS chat_sessions CASCADE;
+DROP TABLE IF EXISTS chat_attachments CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
 -- Enable UUID extension if not already enabled (Supabase usually has this by default)
@@ -60,6 +61,7 @@ CREATE TABLE chat_messages (
     session_id UUID NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -68,7 +70,29 @@ CREATE INDEX idx_chat_messages_session_id ON chat_messages(session_id);
 CREATE INDEX idx_chat_messages_created_at ON chat_messages(created_at);
 
 -- --------------------------------------------------------
--- 4. RLS POLICIES (Optional but recommended for Supabase)
+-- 4. CHAT ATTACHMENTS TABLE
+-- --------------------------------------------------------
+CREATE TABLE chat_attachments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    thread_id UUID REFERENCES chat_sessions(id) ON DELETE SET NULL,
+    filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size_bytes BIGINT NOT NULL CHECK (size_bytes >= 0),
+    sha256 TEXT NOT NULL,
+    storage_bucket TEXT NOT NULL,
+    storage_path TEXT NOT NULL UNIQUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX idx_chat_attachments_user_id ON chat_attachments(user_id);
+CREATE INDEX idx_chat_attachments_thread_id ON chat_attachments(thread_id);
+CREATE INDEX idx_chat_attachments_expires_at ON chat_attachments(expires_at);
+
+-- --------------------------------------------------------
+-- 5. RLS POLICIES (Optional but recommended for Supabase)
 -- --------------------------------------------------------
 -- If you are using the Service Role Key on the backend, RLS won't block backend operations.
 -- But it's good practice to enable RLS so the Anon Key can't maliciously access data.
@@ -76,6 +100,7 @@ CREATE INDEX idx_chat_messages_created_at ON chat_messages(created_at);
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_attachments ENABLE ROW LEVEL SECURITY;
 
 -- If you ever query from the frontend natively using Anon Key, you'd add policies here. 
 -- Since your FastAPI backend handles all queries using the Service Role Key, 

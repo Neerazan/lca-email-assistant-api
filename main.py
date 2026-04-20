@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from middlewares.auth import AuthMiddleware
-from routers import auth, chat, preferences
+from routers import attachments, auth, chat, preferences
 from services.store import store
 from utils.config import settings
 from services.db import shared_pool
@@ -45,6 +45,7 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
 app.include_router(preferences.router, prefix="/preferences", tags=["preferences"])
+app.include_router(attachments.router, prefix="/attachments", tags=["attachments"])
 
 
 @app.get("/")

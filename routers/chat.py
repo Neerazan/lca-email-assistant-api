@@ -1,9 +1,19 @@
-from services.supabase import get_user_by_google_id, create_chat_session, get_user_sessions, save_message, get_session_messages, update_chat_session_title, delete_chat_session
+from services.supabase import (
+    create_chat_session,
+    delete_chat_session,
+    get_attachment_by_id,
+    get_session_messages,
+    get_user_by_google_id,
+    get_user_sessions,
+    save_message,
+    save_message_with_metadata,
+    update_chat_session_title,
+)
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import json
 
 from agent.prompt_builder import build_system_prompt
@@ -16,11 +26,31 @@ router = APIRouter()
 class ChatRequest(BaseModel):
     message: str
     thread_id: str
+    attachments: list["AttachmentRef"] = Field(default_factory=list)
+
+
+class AttachmentRef(BaseModel):
+    attachment_id: str
+    filename: str | None = None
+    mime_type: str | None = None
 
 
 class ResumeRequest(BaseModel):
     thread_id: str
     decisions: list[dict]  # e.g. [{"type": "approve"}]
+
+
+def _format_attachments_for_prompt(attachments: list[dict]) -> str:
+    if not attachments:
+        return ""
+    lines = [
+        f"- {item['id']}: {item['filename']} ({item['mime_type']}, {item['size_bytes']} bytes)"
+        for item in attachments
+    ]
+    return (
+        "The user uploaded these files and you can attach them by ID in email tools.\n"
+        + "\n".join(lines)
+    )
 
 
 @router.post("/stream")
@@ -34,8 +64,57 @@ async def chat_stream(req: ChatRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
+        user = get_user_by_google_id(google_id) if google_id else None
+        if not user:
+            yield f"data: {json.dumps({'type': 'error', 'error': 'Unauthorized'})}\n\n"
+            return
+
+        uploaded_attachments: list[dict] = []
+        for attachment in req.attachments:
+            record = get_attachment_by_id(attachment.attachment_id, user["id"])
+            if not record:
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "type": "error",
+                            "error": f"Attachment not found: {attachment.attachment_id}",
+                        }
+                    )
+                    + "\n\n"
+                )
+                return
+            if record.get("thread_id") and record.get("thread_id") != req.thread_id:
+                yield (
+                    "data: "
+                    + json.dumps(
+                        {
+                            "type": "error",
+                            "error": f"Attachment not linked to this thread: {attachment.attachment_id}",
+                        }
+                    )
+                    + "\n\n"
+                )
+                return
+            uploaded_attachments.append(record)
+
         # Save the user's message to Supabase
-        save_message(session_id=req.thread_id, role="user", content=req.message)
+        save_message_with_metadata(
+            session_id=req.thread_id,
+            role="user",
+            content=req.message,
+            metadata={
+                "attachments": [
+                    {
+                        "id": a["id"],
+                        "filename": a["filename"],
+                        "mime_type": a["mime_type"],
+                        "size_bytes": a["size_bytes"],
+                    }
+                    for a in uploaded_attachments
+                ]
+            },
+        )
 
         # Check if this is the first message in the session to update the title
         session_msgs = get_session_messages(req.thread_id)
@@ -45,9 +124,10 @@ async def chat_stream(req: ChatRequest, request: Request):
             new_title = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
             update_chat_session_title(req.thread_id, new_title)
 
-        # Fetch dynamic system prompt
-        user = get_user_by_google_id(google_id)
         prompt_text = await build_system_prompt(user["id"])
+        attachment_context = _format_attachments_for_prompt(uploaded_attachments)
+        if attachment_context:
+            prompt_text = f"{prompt_text}\n\n{attachment_context}"
         system_message = SystemMessage(content=prompt_text, id="system_prompt")
 
         inputs = {"messages": [system_message, HumanMessage(content=req.message)]}
@@ -220,7 +300,14 @@ async def get_messages(session_id: str, request: Request):
         
     messages = get_session_messages(session_id)
     # Format messages for the frontend
-    return [{"role": msg["role"], "content": msg["content"]} for msg in messages]
+    return [
+        {
+            "role": msg["role"],
+            "content": msg["content"],
+            "metadata": msg.get("metadata", {}),
+        }
+        for msg in messages
+    ]
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, request: Request):

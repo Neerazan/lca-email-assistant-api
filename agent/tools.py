@@ -2,6 +2,7 @@ from typing import List, Optional
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableConfig
 from services.gmail import GmailService
+from services.attachments import load_attachments_for_user
 from services.store import save_memory, delete_memory
 from services.supabase import get_user_by_google_id
 import uuid
@@ -68,6 +69,7 @@ def send_email(
     config: RunnableConfig,
     cc: Optional[List[str]] = None,
     bcc: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
 ) -> str:
     """
     Send an email message.
@@ -78,7 +80,42 @@ def send_email(
         subject: The subject line of the email.
         cc: Optional list of CC recipients.
         bcc: Optional list of BCC recipients.
+        attachments: Optional list of uploaded attachment IDs.
     """
+    google_id = config.get("configurable", {}).get("google_id")
+    thread_id = config.get("configurable", {}).get("thread_id")
+    if not google_id:
+        return "Error: User is not authenticated or google_id is missing."
+
+    if attachments:
+        user = get_user_by_google_id(google_id)
+        if not user:
+            return "Error: User is not authenticated or google_id is missing."
+        try:
+            loaded = load_attachments_for_user(
+                attachment_ids=attachments,
+                user_id=user["id"],
+                thread_id=thread_id,
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        service = GmailService(google_id)
+        return service.send_raw_email(
+            message=message,
+            subject=subject,
+            to=[to],
+            cc=cc,
+            bcc=bcc,
+            attachments=[
+                {
+                    "filename": item.filename,
+                    "mime_type": item.mime_type,
+                    "content": item.content,
+                }
+                for item in loaded
+            ],
+        )
+
     original_tool = _get_toolkit_tool(config, "send_gmail_message")
     if not original_tool:
         return "Error: User is not authenticated or google_id is missing."
@@ -98,6 +135,7 @@ def create_draft(
     config: RunnableConfig,
     cc: Optional[List[str]] = None,
     bcc: Optional[List[str]] = None,
+    attachments: Optional[List[str]] = None,
 ) -> str:
     """
     Create a draft email.
@@ -108,7 +146,42 @@ def create_draft(
         subject: The subject line of the draft.
         cc: Optional list of CC recipients.
         bcc: Optional list of BCC recipients.
+        attachments: Optional list of uploaded attachment IDs.
     """
+    google_id = config.get("configurable", {}).get("google_id")
+    thread_id = config.get("configurable", {}).get("thread_id")
+    if not google_id:
+        return "Error: User is not authenticated or google_id is missing."
+
+    if attachments:
+        user = get_user_by_google_id(google_id)
+        if not user:
+            return "Error: User is not authenticated or google_id is missing."
+        try:
+            loaded = load_attachments_for_user(
+                attachment_ids=attachments,
+                user_id=user["id"],
+                thread_id=thread_id,
+            )
+        except ValueError as exc:
+            return f"Error: {exc}"
+        service = GmailService(google_id)
+        return service.create_raw_draft(
+            message=message,
+            subject=subject,
+            to=[to],
+            cc=cc,
+            bcc=bcc,
+            attachments=[
+                {
+                    "filename": item.filename,
+                    "mime_type": item.mime_type,
+                    "content": item.content,
+                }
+                for item in loaded
+            ],
+        )
+
     original_tool = _get_toolkit_tool(config, "create_gmail_draft")
     if not original_tool:
         return "Error: User is not authenticated or google_id is missing."

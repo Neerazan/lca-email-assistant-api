@@ -1,6 +1,9 @@
 from google.oauth2.credentials import Credentials
 from langchain_google_community import GmailToolkit
 from langchain_google_community.gmail.utils import build_gmail_service
+from email.message import EmailMessage
+from typing import Any
+import mimetypes
 
 from services.supabase import get_user_tokens
 from utils.config import settings
@@ -96,6 +99,94 @@ class GmailService:
     def get_toolkit(self) -> GmailToolkit:
         """Returns a LangChain GmailToolkit for this user."""
         return GmailToolkit(api_resource=self.api_resource)
+
+    @staticmethod
+    def _normalize_recipients(value: list[str] | str | None) -> str:
+        if not value:
+            return ""
+        if isinstance(value, str):
+            return value
+        return ", ".join(value)
+
+    def build_raw_mime_message(
+        self,
+        message: str,
+        subject: str,
+        to: list[str] | str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> str:
+        email = EmailMessage()
+        email["To"] = self._normalize_recipients(to)
+        if cc:
+            email["Cc"] = self._normalize_recipients(cc)
+        if bcc:
+            email["Bcc"] = self._normalize_recipients(bcc)
+        email["Subject"] = subject
+        email.set_content(message)
+
+        for attachment in attachments or []:
+            filename = attachment["filename"]
+            mime_type = attachment.get("mime_type") or mimetypes.guess_type(filename)[0]
+            if not mime_type:
+                mime_type = "application/octet-stream"
+            maintype, subtype = mime_type.split("/", 1)
+            email.add_attachment(
+                attachment["content"],
+                maintype=maintype,
+                subtype=subtype,
+                filename=filename,
+            )
+        raw_bytes = email.as_bytes()
+        return base64.urlsafe_b64encode(raw_bytes).decode("utf-8")
+
+    def send_raw_email(
+        self,
+        message: str,
+        subject: str,
+        to: list[str] | str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ):
+        raw = self.build_raw_mime_message(
+            message=message,
+            subject=subject,
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            attachments=attachments,
+        )
+        payload = {"raw": raw}
+        result = self.api_resource.users().messages().send(userId="me", body=payload).execute()
+        return f"Message sent successfully. Message Id: {result.get('id', 'unknown')}"
+
+    def create_raw_draft(
+        self,
+        message: str,
+        subject: str,
+        to: list[str] | str,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ):
+        raw = self.build_raw_mime_message(
+            message=message,
+            subject=subject,
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            attachments=attachments,
+        )
+        result = (
+            self.api_resource.users()
+            .drafts()
+            .create(userId="me", body={"message": {"raw": raw}})
+            .execute()
+        )
+        draft_id = result.get("id", "unknown")
+        return f"Draft created successfully. Draft Id: {draft_id}"
 
     def list_emails(
         self,
