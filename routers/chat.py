@@ -1,85 +1,16 @@
 from services.supabase import get_user_by_google_id, create_chat_session, get_user_sessions, save_message, get_session_messages, update_chat_session_title, delete_chat_session
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain.agents import create_agent
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.types import Command
-from langchain.agents.middleware import HumanInTheLoopMiddleware
 from pydantic import BaseModel
-from utils.config import settings
 import json
 
-from agent.tools import search_emails, get_email, get_thread, send_email, create_draft, save_memory_tool, delete_memory_tool
 from agent.prompt_builder import build_system_prompt
-from services.store import store
+from agent.setup import agent
+from agent.utils import _serialize_interrupt
 
 router = APIRouter()
-
-
-llm = ChatOpenAI(model="gpt-4.1-nano", streaming=True, api_key=settings.OPENAI_API_KEY)
-tools = [search_emails, get_email, get_thread, send_email, create_draft, save_memory_tool, delete_memory_tool]
-
-# Persistent checkpointer — stores LangGraph state in Supabase PostgreSQL.
-# Pool is opened and setup() called in main.py lifespan.
-from services.db import shared_pool
-
-checkpointer = AsyncPostgresSaver(shared_pool)
-
-agent = create_agent(
-    model=llm,
-    tools=tools,
-    # We leave system_prompt None here and inject it dynamically in the routes
-    system_prompt=None,
-    middleware=[
-        HumanInTheLoopMiddleware(
-            interrupt_on={
-                "send_email": True,
-                "create_draft": False,
-                "get_email": False,
-                "search_emails": False,
-            },
-        )
-    ],
-    checkpointer=checkpointer,
-    store=store
-)
-
-
-def _serialize_interrupt(interrupt_obj) -> dict:
-    """Serialize a HITLRequest interrupt value into a JSON-safe dict."""
-    value = getattr(interrupt_obj, "value", interrupt_obj)
-    if not isinstance(value, dict):
-        value = getattr(value, "__dict__", {})
-
-    action_requests = []
-    for ar in value.get("action_requests", []):
-        if not isinstance(ar, dict):
-            ar = getattr(ar, "__dict__", {})
-        action_requests.append(
-            {
-                "action": ar.get("name", ""),
-                "args": ar.get("args", {}),
-                "description": ar.get("description", ""),
-            }
-        )
-
-    review_configs = []
-    for rc in value.get("review_configs", []):
-        if not isinstance(rc, dict):
-            rc = getattr(rc, "__dict__", {})
-        review_configs.append(
-            {
-                "actionName": rc.get("action_name", ""),
-                "allowedDecisions": list(rc.get("allowed_decisions", [])),
-            }
-        )
-
-    return {
-        "actionRequests": action_requests,
-        "reviewConfigs": review_configs,
-    }
 
 
 class ChatRequest(BaseModel):

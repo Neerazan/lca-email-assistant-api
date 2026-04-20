@@ -5,8 +5,6 @@ from middlewares.auth import AuthMiddleware
 from routers import auth, chat, preferences
 from services.store import store
 from utils.config import settings
-
-
 from services.db import shared_pool
 
 @asynccontextmanager
@@ -16,7 +14,8 @@ async def lifespan(app: FastAPI):
     await shared_pool.open()
     
     # Create checkpoint tables in PostgreSQL
-    await chat.checkpointer.setup()
+    from agent.setup import checkpointer
+    await checkpointer.setup()
     
     # Store setup
     await store.setup()
