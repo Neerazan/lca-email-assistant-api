@@ -8,6 +8,27 @@ from services.supabase import get_user_by_google_id
 import uuid
 
 
+def _is_uuid_like(value: str) -> bool:
+    """Return True when the input is a UUID string."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _safe_tool_invoke(original_tool, args: dict, tool_name: str) -> str:
+    """Invoke toolkit tool and normalize exceptions into model-safe errors."""
+    try:
+        return original_tool.invoke(args)
+    except Exception as exc:
+        print(f"[ERROR] Tool invoke failed for {tool_name}: {exc}")
+        return (
+            f"Error: Failed to run {tool_name}. "
+            "Please verify your inputs and try again."
+        )
+
+
 def _get_toolkit_tool(config: RunnableConfig, tool_name: str):
     """Helper to get a specific tool from the Gmail toolkit."""
     google_id = config.get("configurable", {}).get("google_id")
@@ -26,11 +47,16 @@ def search_emails(query: str, config: RunnableConfig, max_results: int = 10) -> 
     Args:
         query: Gmail search query (e.g., "is:unread", "from:boss@example.com").
         max_results: Maximum number of emails to return (default 10).
+            Returned message/thread IDs should be used for get_email/get_thread.
     """
     original_tool = _get_toolkit_tool(config, "search_gmail")
     if not original_tool:
         return "Error: User is not authenticated or google_id is missing."
-    return original_tool.invoke({"query": query, "max_results": max_results})
+    return _safe_tool_invoke(
+        original_tool,
+        {"query": query, "max_results": max_results},
+        "search_gmail",
+    )
 
 
 @tool
@@ -39,12 +65,22 @@ def get_email(message_id: str, config: RunnableConfig) -> str:
     Get a specific email message by its ID.
 
     Args:
-        message_id: The unique ID of the email message to retrieve.
+        message_id: Gmail message resource ID returned by search/thread tools.
+            Do not pass chat/session/attachment UUIDs.
     """
+    if _is_uuid_like(message_id):
+        return (
+            "Error: Invalid Gmail message_id format. "
+            "Use a Gmail message ID returned by search_emails or get_thread."
+        )
     original_tool = _get_toolkit_tool(config, "get_gmail_message")
     if not original_tool:
         return "Error: User is not authenticated or google_id is missing."
-    return original_tool.invoke({"message_id": message_id})
+    return _safe_tool_invoke(
+        original_tool,
+        {"message_id": message_id},
+        "get_gmail_message",
+    )
 
 
 @tool
@@ -53,12 +89,21 @@ def get_thread(thread_id: str, config: RunnableConfig) -> str:
     Get a specific email thread by its thread ID.
 
     Args:
-        thread_id: The unique ID of the email thread to retrieve.
+        thread_id: Gmail thread ID returned by Gmail search/thread APIs.
     """
+    if _is_uuid_like(thread_id):
+        return (
+            "Error: Invalid Gmail thread_id format. "
+            "Use a Gmail thread ID returned by search_emails or get_thread."
+        )
     original_tool = _get_toolkit_tool(config, "get_gmail_thread")
     if not original_tool:
         return "Error: User is not authenticated or google_id is missing."
-    return original_tool.invoke({"thread_id": thread_id})
+    return _safe_tool_invoke(
+        original_tool,
+        {"thread_id": thread_id},
+        "get_gmail_thread",
+    )
 
 
 @tool
@@ -100,21 +145,25 @@ def send_email(
         except ValueError as exc:
             return f"Error: {exc}"
         service = GmailService(google_id)
-        return service.send_raw_email(
-            message=message,
-            subject=subject,
-            to=[to],
-            cc=cc,
-            bcc=bcc,
-            attachments=[
-                {
-                    "filename": item.filename,
-                    "mime_type": item.mime_type,
-                    "content": item.content,
-                }
-                for item in loaded
-            ],
-        )
+        try:
+            return service.send_raw_email(
+                message=message,
+                subject=subject,
+                to=[to],
+                cc=cc,
+                bcc=bcc,
+                attachments=[
+                    {
+                        "filename": item.filename,
+                        "mime_type": item.mime_type,
+                        "content": item.content,
+                    }
+                    for item in loaded
+                ],
+            )
+        except Exception as exc:
+            print(f"[ERROR] send_raw_email failed: {exc}")
+            return "Error: Failed to send email. Please try again."
 
     original_tool = _get_toolkit_tool(config, "send_gmail_message")
     if not original_tool:
@@ -124,7 +173,7 @@ def send_email(
         args["cc"] = cc
     if bcc:
         args["bcc"] = bcc
-    return original_tool.invoke(args)
+    return _safe_tool_invoke(original_tool, args, "send_gmail_message")
 
 
 @tool
@@ -166,21 +215,25 @@ def create_draft(
         except ValueError as exc:
             return f"Error: {exc}"
         service = GmailService(google_id)
-        return service.create_raw_draft(
-            message=message,
-            subject=subject,
-            to=[to],
-            cc=cc,
-            bcc=bcc,
-            attachments=[
-                {
-                    "filename": item.filename,
-                    "mime_type": item.mime_type,
-                    "content": item.content,
-                }
-                for item in loaded
-            ],
-        )
+        try:
+            return service.create_raw_draft(
+                message=message,
+                subject=subject,
+                to=[to],
+                cc=cc,
+                bcc=bcc,
+                attachments=[
+                    {
+                        "filename": item.filename,
+                        "mime_type": item.mime_type,
+                        "content": item.content,
+                    }
+                    for item in loaded
+                ],
+            )
+        except Exception as exc:
+            print(f"[ERROR] create_raw_draft failed: {exc}")
+            return "Error: Failed to create draft. Please try again."
 
     original_tool = _get_toolkit_tool(config, "create_gmail_draft")
     if not original_tool:
@@ -190,7 +243,7 @@ def create_draft(
         args["cc"] = cc
     if bcc:
         args["bcc"] = bcc
-    return original_tool.invoke(args)
+    return _safe_tool_invoke(original_tool, args, "create_gmail_draft")
 
 
 @tool

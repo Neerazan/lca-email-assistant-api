@@ -53,6 +53,17 @@ def _format_attachments_for_prompt(attachments: list[dict]) -> str:
     )
 
 
+def _sse_event(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def _safe_stream_error() -> str:
+    return (
+        "I ran into an unexpected error while processing that request. "
+        "Please try again."
+    )
+
+
 @router.post("/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     """
@@ -66,35 +77,30 @@ async def chat_stream(req: ChatRequest, request: Request):
     async def event_generator():
         user = get_user_by_google_id(google_id) if google_id else None
         if not user:
-            yield f"data: {json.dumps({'type': 'error', 'error': 'Unauthorized'})}\n\n"
+            yield _sse_event({"type": "error", "error": "Unauthorized"})
+            yield _sse_event({"type": "done"})
             return
 
         uploaded_attachments: list[dict] = []
         for attachment in req.attachments:
             record = get_attachment_by_id(attachment.attachment_id, user["id"])
             if not record:
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "type": "error",
-                            "error": f"Attachment not found: {attachment.attachment_id}",
-                        }
-                    )
-                    + "\n\n"
+                yield _sse_event(
+                    {
+                        "type": "error",
+                        "error": f"Attachment not found: {attachment.attachment_id}",
+                    }
                 )
+                yield _sse_event({"type": "done"})
                 return
             if record.get("thread_id") and record.get("thread_id") != req.thread_id:
-                yield (
-                    "data: "
-                    + json.dumps(
-                        {
-                            "type": "error",
-                            "error": f"Attachment not linked to this thread: {attachment.attachment_id}",
-                        }
-                    )
-                    + "\n\n"
+                yield _sse_event(
+                    {
+                        "type": "error",
+                        "error": f"Attachment not linked to this thread: {attachment.attachment_id}",
+                    }
                 )
+                yield _sse_event({"type": "done"})
                 return
             uploaded_attachments.append(record)
 
@@ -151,23 +157,43 @@ async def chat_stream(req: ChatRequest, request: Request):
                     token = chunk.content
                     if isinstance(token, str) and token:
                         assistant_response += token
-                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                        yield _sse_event({"type": "token", "token": token})
 
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "tool")
-                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+                    yield _sse_event({"type": "tool_call", "tool": tool_name})
+        except Exception as exc:
+            print(f"[ERROR] chat stream failed for thread_id={req.thread_id}: {exc}")
+            if not assistant_response:
+                fallback = _safe_stream_error()
+                assistant_response = fallback
+                yield _sse_event({"type": "token", "token": fallback})
+            yield _sse_event({"type": "error", "error": "Chat stream failed"})
+            yield _sse_event({"type": "done"})
+            return
         finally:
             # After streaming ends (or is cancelled), save the full assistant response to Supabase
             if assistant_response:
-                save_message(
-                    session_id=req.thread_id,
-                    role="assistant",
-                    content=assistant_response,
-                )
+                try:
+                    save_message(
+                        session_id=req.thread_id,
+                        role="assistant",
+                        content=assistant_response,
+                    )
+                except Exception as exc:
+                    print(
+                        f"[ERROR] Failed to save assistant message for thread_id={req.thread_id}: {exc}"
+                    )
 
         print("[DEBUG] astream_events loop finished, checking state...")
         # After streaming ends, check if the graph paused due to an interrupt
-        state = await agent.aget_state(config)
+        try:
+            state = await agent.aget_state(config)
+        except Exception as exc:
+            print(f"[ERROR] Failed to fetch graph state for thread_id={req.thread_id}: {exc}")
+            yield _sse_event({"type": "error", "error": "Failed to read chat state"})
+            yield _sse_event({"type": "done"})
+            return
         print(f"[DEBUG] state.next = {state.next}")
         print(f"[DEBUG] state.tasks = {state.tasks}")
         if state.tasks:
@@ -180,11 +206,11 @@ async def chat_stream(req: ChatRequest, request: Request):
                         print(f"[DEBUG] interrupt value = {intr.value}")
                         payload = _serialize_interrupt(intr)
                         print(f"[DEBUG] Emitting interrupt payload: {payload}")
-                        yield f"data: {json.dumps({'type': 'interrupt', 'value': payload})}\n\n"
+                        yield _sse_event({"type": "interrupt", "value": payload})
                     return  # Stop — wait for /resume
 
         print("[DEBUG] No interrupts found, emitting done")
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield _sse_event({"type": "done"})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
@@ -212,7 +238,11 @@ async def chat_resume(req: ResumeRequest, request: Request):
         )
 
         # Fetch dynamic system prompt
-        user = get_user_by_google_id(google_id)
+        user = get_user_by_google_id(google_id) if google_id else None
+        if not user:
+            yield _sse_event({"type": "error", "error": "Unauthorized"})
+            yield _sse_event({"type": "done"})
+            return
         prompt_text = await build_system_prompt(user["id"])
         system_message = SystemMessage(content=prompt_text, id="system_prompt")
 
@@ -237,30 +267,52 @@ async def chat_resume(req: ResumeRequest, request: Request):
                     token = chunk.content
                     if isinstance(token, str) and token:
                         assistant_response += token
-                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                        yield _sse_event({"type": "token", "token": token})
 
                 elif kind == "on_tool_start":
                     tool_name = event.get("name", "tool")
-                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+                    yield _sse_event({"type": "tool_call", "tool": tool_name})
+        except Exception as exc:
+            print(f"[ERROR] chat resume failed for thread_id={req.thread_id}: {exc}")
+            if not assistant_response:
+                fallback = _safe_stream_error()
+                assistant_response = fallback
+                yield _sse_event({"type": "token", "token": fallback})
+            yield _sse_event({"type": "error", "error": "Chat resume failed"})
+            yield _sse_event({"type": "done"})
+            return
         finally:
             if assistant_response:
-                save_message(
-                    session_id=req.thread_id,
-                    role="assistant",
-                    content=assistant_response,
-                )
+                try:
+                    save_message(
+                        session_id=req.thread_id,
+                        role="assistant",
+                        content=assistant_response,
+                    )
+                except Exception as exc:
+                    print(
+                        f"[ERROR] Failed to save resumed assistant message for thread_id={req.thread_id}: {exc}"
+                    )
 
         # Check for further interrupts (e.g. if agent chains multiple send_email calls)
-        state = await agent.aget_state(config)
+        try:
+            state = await agent.aget_state(config)
+        except Exception as exc:
+            print(
+                f"[ERROR] Failed to fetch resumed graph state for thread_id={req.thread_id}: {exc}"
+            )
+            yield _sse_event({"type": "error", "error": "Failed to read chat state"})
+            yield _sse_event({"type": "done"})
+            return
         if state.tasks:
             for task in state.tasks:
                 if hasattr(task, "interrupts") and task.interrupts:
                     for intr in task.interrupts:
                         payload = _serialize_interrupt(intr)
-                        yield f"data: {json.dumps({'type': 'interrupt', 'value': payload})}\n\n"
+                        yield _sse_event({"type": "interrupt", "value": payload})
                     return
 
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        yield _sse_event({"type": "done"})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
