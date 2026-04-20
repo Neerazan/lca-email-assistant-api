@@ -13,7 +13,7 @@ Flow:
 from fastapi import APIRouter, HTTPException, Response, Request
 from pydantic import BaseModel
 
-from services.supabase import upsert_user, save_user_tokens
+from services.supabase import upsert_user, save_user_tokens, get_user_by_google_id
 from utils.google_auth import verify_google_id_token, exchange_auth_code
 from utils.encryption import encrypt_token
 from utils.security import (
@@ -98,7 +98,12 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
         # Proceed anyway because login conceptually succeeded
 
     # 5. Issue our own app-level tokens
-    app_access_token = create_access_token(data={"sub": google_id, "email": email})
+    app_access_token = create_access_token(data={
+        "sub": google_id, 
+        "email": email,
+        "name": full_name,
+        "picture": avatar_url
+    })
     app_refresh_token = create_refresh_token(data={"sub": google_id, "email": email})
 
     # 6. Set HttpOnly cookie for the refresh token
@@ -132,8 +137,18 @@ def refresh_token(request: Request, response: Response):
         if not google_id or not email:
             raise HTTPException(status_code=401, detail="Invalid token payload")
 
+        try:
+            user = get_user_by_google_id(google_id)
+        except Exception:
+            user = {}
+
         # Issue a new access token
-        new_access_token = create_access_token(data={"sub": google_id, "email": email})
+        new_access_token = create_access_token(data={
+            "sub": google_id, 
+            "email": email,
+            "name": user.get("full_name"),
+            "picture": user.get("avatar_url")
+        })
 
         return {"access_token": new_access_token}
     except Exception:
