@@ -60,29 +60,30 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         assistant_response = ""
 
-        print(f"[DEBUG] Starting astream_events for thread_id={req.thread_id}")
-        async for event in agent.astream_events(inputs, config=config, version="v2"):
-            kind = event["event"]
-            print(f"[DEBUG] Event: {kind}, name={event.get('name', 'N/A')}")
+        try:
+            print(f"[DEBUG] Starting astream_events for thread_id={req.thread_id}")
+            async for event in agent.astream_events(inputs, config=config, version="v2"):
+                kind = event["event"]
+                print(f"[DEBUG] Event: {kind}, name={event.get('name', 'N/A')}")
 
-            if kind == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                token = chunk.content
-                if isinstance(token, str) and token:
-                    assistant_response += token
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    token = chunk.content
+                    if isinstance(token, str) and token:
+                        assistant_response += token
+                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
 
-            elif kind == "on_tool_start":
-                tool_name = event.get("name", "tool")
-                yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
-
-        # After streaming ends, save the full assistant response to Supabase
-        if assistant_response:
-            save_message(
-                session_id=req.thread_id,
-                role="assistant",
-                content=assistant_response,
-            )
+                elif kind == "on_tool_start":
+                    tool_name = event.get("name", "tool")
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+        finally:
+            # After streaming ends (or is cancelled), save the full assistant response to Supabase
+            if assistant_response:
+                save_message(
+                    session_id=req.thread_id,
+                    role="assistant",
+                    content=assistant_response,
+                )
 
         print("[DEBUG] astream_events loop finished, checking state...")
         # After streaming ends, check if the graph paused due to an interrupt
@@ -141,22 +142,33 @@ async def chat_resume(req: ResumeRequest, request: Request):
             update={"messages": [system_message]}
         )
 
-        async for event in agent.astream_events(
-            command,
-            config=config,
-            version="v2",
-        ):
-            kind = event["event"]
+        assistant_response = ""
 
-            if kind == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                token = chunk.content
-                if isinstance(token, str) and token:
-                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+        try:
+            async for event in agent.astream_events(
+                command,
+                config=config,
+                version="v2",
+            ):
+                kind = event["event"]
 
-            elif kind == "on_tool_start":
-                tool_name = event.get("name", "tool")
-                yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    token = chunk.content
+                    if isinstance(token, str) and token:
+                        assistant_response += token
+                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+
+                elif kind == "on_tool_start":
+                    tool_name = event.get("name", "tool")
+                    yield f"data: {json.dumps({'type': 'tool_call', 'tool': tool_name})}\n\n"
+        finally:
+            if assistant_response:
+                save_message(
+                    session_id=req.thread_id,
+                    role="assistant",
+                    content=assistant_response,
+                )
 
         # Check for further interrupts (e.g. if agent chains multiple send_email calls)
         state = await agent.aget_state(config)
