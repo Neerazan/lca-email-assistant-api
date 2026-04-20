@@ -2,6 +2,7 @@ from services.supabase import (
     create_chat_session,
     delete_chat_session,
     get_attachment_by_id,
+    get_chat_session,
     get_session_messages,
     get_user_by_google_id,
     get_user_sessions,
@@ -12,15 +13,24 @@ from services.supabase import (
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 from pydantic import BaseModel, Field
+import asyncio
 import json
+import re
 
 from agent.prompt_builder import build_system_prompt
 from agent.setup import agent
 from agent.utils import _serialize_interrupt
+from utils.config import settings
 
 router = APIRouter()
+title_llm = ChatOpenAI(
+    model="gpt-4.1-nano",
+    temperature=0,
+    api_key=settings.OPENAI_API_KEY,
+)
 
 
 class ChatRequest(BaseModel):
@@ -62,6 +72,43 @@ def _safe_stream_error() -> str:
         "I ran into an unexpected error while processing that request. "
         "Please try again."
     )
+
+def _normalize_title(raw_title: str) -> str:
+    text = (raw_title or "").strip().strip("\"'")
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"[.!?,;:]+$", "", text)
+    words = text.split()
+    if not words:
+        return "New Chat"
+    return " ".join(words[:6])
+
+async def _generate_and_store_session_title(
+    session_id: str, user_message: str, assistant_message: str
+):
+    """Generate title lazily and update only default-titled sessions."""
+    try:
+        session = get_chat_session(session_id)
+        if not session:
+            return
+        if (session.get("title") or "").strip() != "New Chat":
+            return
+
+        prompt = (
+            "Generate a short title (max 6 words) for this conversation.\n"
+            "Rules:\n"
+            "- Be concise\n"
+            "- No punctuation at the end\n"
+            "- No quotes\n\n"
+            f'User: "{user_message.strip()}"\n'
+            f'Assistant: "{assistant_message.strip()}"\n'
+            "Output only the title."
+        )
+        result = await title_llm.ainvoke(prompt)
+        title = _normalize_title(getattr(result, "content", "") or "")
+        if title and title != "New Chat":
+            update_chat_session_title(session_id, title)
+    except Exception as exc:
+        print(f"[ERROR] Failed lazy title generation for session_id={session_id}: {exc}")
 
 
 @router.post("/stream")
@@ -122,14 +169,6 @@ async def chat_stream(req: ChatRequest, request: Request):
             },
         )
 
-        # Check if this is the first message in the session to update the title
-        session_msgs = get_session_messages(req.thread_id)
-        if len(session_msgs) == 1:
-            # Generate a simple title from the first message (e.g. first 5 words)
-            words = req.message.split()
-            new_title = " ".join(words[:5]) + ("..." if len(words) > 5 else "")
-            update_chat_session_title(req.thread_id, new_title)
-
         prompt_text = await build_system_prompt(user["id"])
         attachment_context = _format_attachments_for_prompt(uploaded_attachments)
         if attachment_context:
@@ -180,6 +219,15 @@ async def chat_stream(req: ChatRequest, request: Request):
                         role="assistant",
                         content=assistant_response,
                     )
+                    session_msgs = get_session_messages(req.thread_id)
+                    if len(session_msgs) <= 2:
+                        asyncio.create_task(
+                            _generate_and_store_session_title(
+                                session_id=req.thread_id,
+                                user_message=req.message,
+                                assistant_message=assistant_response,
+                            )
+                        )
                 except Exception as exc:
                     print(
                         f"[ERROR] Failed to save assistant message for thread_id={req.thread_id}: {exc}"

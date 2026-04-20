@@ -144,6 +144,16 @@ def get_user_sessions(user_id: str):
     )
     return response.data
 
+def get_chat_session(session_id: str):
+    response = (
+        supabase.table("chat_sessions")
+        .select("*")
+        .eq("id", session_id)
+        .single()
+        .execute()
+    )
+    return response.data
+
 def delete_chat_session(session_id: str):
     response = (
         supabase.table("chat_sessions")
