@@ -62,7 +62,7 @@ def get_email(message_id: str, config: RunnableConfig) -> str:
         message_id: Gmail message resource ID returned by search/thread tools.
             Do not pass chat/session/attachment UUIDs.
     """
-    if _is_uuid_like(message_id):
+    if is_valid_uuid(message_id):
         return (
             "Error: Invalid Gmail message_id format. "
             "Use a Gmail message ID returned by search_emails or get_thread."
@@ -85,7 +85,7 @@ def get_thread(thread_id: str, config: RunnableConfig) -> str:
     Args:
         thread_id: Gmail thread ID returned by Gmail search/thread APIs.
     """
-    if _is_uuid_like(thread_id):
+    if is_valid_uuid(thread_id):
         return (
             "Error: Invalid Gmail thread_id format. "
             "Use a Gmail thread ID returned by search_emails or get_thread."
@@ -126,6 +126,7 @@ def send_email(
     if not google_id:
         return "Error: User is not authenticated or google_id is missing."
 
+    loaded_attachments = []
     if attachments:
         user = get_user_by_google_id(google_id)
         if not user:
@@ -142,38 +143,30 @@ def send_email(
                 user_id=user["id"],
                 thread_id=thread_id,
             )
+            loaded_attachments = [
+                {
+                    "filename": item.filename,
+                    "mime_type": item.mime_type,
+                    "content": item.content,
+                }
+                for item in loaded
+            ]
         except ValueError as exc:
             return f"Error: {exc}"
-        service = GmailService(google_id)
-        try:
-            return service.send_raw_email(
-                message=message,
-                subject=subject,
-                to=[to],
-                cc=cc,
-                bcc=bcc,
-                attachments=[
-                    {
-                        "filename": item.filename,
-                        "mime_type": item.mime_type,
-                        "content": item.content,
-                    }
-                    for item in loaded
-                ],
-            )
-        except Exception as exc:
-            print(f"[ERROR] send_raw_email failed: {exc}")
-            return "Error: Failed to send email. Please try again."
 
-    original_tool = _get_toolkit_tool(config, "send_gmail_message")
-    if not original_tool:
-        return "Error: User is not authenticated or google_id is missing."
-    args = {"message": message, "to": [to], "subject": subject}
-    if cc:
-        args["cc"] = cc
-    if bcc:
-        args["bcc"] = bcc
-    return _safe_tool_invoke(original_tool, args, "send_gmail_message")
+    service = GmailService(google_id)
+    try:
+        return service.send_raw_email(
+            message=message,
+            subject=subject,
+            to=[to],
+            cc=cc,
+            bcc=bcc,
+            attachments=loaded_attachments if loaded_attachments else None,
+        )
+    except Exception as exc:
+        print(f"[ERROR] send_raw_email failed: {exc}")
+        return "Error: Failed to send email. Please try again."
 
 
 @tool
@@ -202,6 +195,7 @@ def create_draft(
     if not google_id:
         return "Error: User is not authenticated or google_id is missing."
 
+    loaded_attachments = []
     if attachments:
         user = get_user_by_google_id(google_id)
         if not user:
@@ -218,38 +212,30 @@ def create_draft(
                 user_id=user["id"],
                 thread_id=thread_id,
             )
+            loaded_attachments = [
+                {
+                    "filename": item.filename,
+                    "mime_type": item.mime_type,
+                    "content": item.content,
+                }
+                for item in loaded
+            ]
         except ValueError as exc:
             return f"Error: {exc}"
-        service = GmailService(google_id)
-        try:
-            return service.create_raw_draft(
-                message=message,
-                subject=subject,
-                to=[to],
-                cc=cc,
-                bcc=bcc,
-                attachments=[
-                    {
-                        "filename": item.filename,
-                        "mime_type": item.mime_type,
-                        "content": item.content,
-                    }
-                    for item in loaded
-                ],
-            )
-        except Exception as exc:
-            print(f"[ERROR] create_raw_draft failed: {exc}")
-            return "Error: Failed to create draft. Please try again."
 
-    original_tool = _get_toolkit_tool(config, "create_gmail_draft")
-    if not original_tool:
-        return "Error: User is not authenticated or google_id is missing."
-    args = {"message": message, "to": [to], "subject": subject}
-    if cc:
-        args["cc"] = cc
-    if bcc:
-        args["bcc"] = bcc
-    return _safe_tool_invoke(original_tool, args, "create_gmail_draft")
+    service = GmailService(google_id)
+    try:
+        return service.create_raw_draft(
+            message=message,
+            subject=subject,
+            to=[to],
+            cc=cc,
+            bcc=bcc,
+            attachments=loaded_attachments if loaded_attachments else None,
+        )
+    except Exception as exc:
+        print(f"[ERROR] create_raw_draft failed: {exc}")
+        return "Error: Failed to create draft. Please try again."
 
 
 @tool
