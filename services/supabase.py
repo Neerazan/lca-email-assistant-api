@@ -9,6 +9,9 @@ Tables used:
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+import uuid
+
+
 
 from supabase import create_client, Client
 from storage3.exceptions import StorageApiError
@@ -18,6 +21,32 @@ from utils.config import settings
 supabase: Client = create_client(
     settings.SUPABASE_URL, settings.SUPABASE_SERVICE_ROLE_KEY
 )
+
+
+def is_valid_uuid(val: Any) -> bool:
+    """Return True if val is a valid UUID string or object."""
+    if not val:
+        return False
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def sanitize_uuid(val: Any) -> str | None:
+    """
+    Normalize a potential UUID string.
+    Returns None if the string is empty, 'null', 'undefined', or invalid.
+    """
+    if not val:
+        return None
+    s = str(val).strip().lower()
+    if s in ("null", "undefined", "none", ""):
+        return None
+    if is_valid_uuid(val):
+        return str(val)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -39,10 +68,13 @@ def get_user_by_google_id(google_id: str):
 
 def get_user_by_id(user_id: str):
     """Fetch a user record by UUID primary key."""
+    uid = sanitize_uuid(user_id)
+    if not uid:
+        return None
     response = (
         supabase.table("users")
         .select("*")
-        .eq("id", user_id)
+        .eq("id", uid)
         .single()
         .execute()
     )
@@ -145,29 +177,38 @@ def get_user_sessions(user_id: str):
     return response.data
 
 def get_chat_session(session_id: str):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        return None
     response = (
         supabase.table("chat_sessions")
         .select("*")
-        .eq("id", session_id)
+        .eq("id", sid)
         .single()
         .execute()
     )
     return response.data
 
 def delete_chat_session(session_id: str):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        return None
     response = (
         supabase.table("chat_sessions")
         .delete()
-        .eq("id", session_id)
+        .eq("id", sid)
         .execute()
     )
     return response.data
 
 def update_chat_session_title(session_id: str, title: str):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        return None
     response = (
         supabase.table("chat_sessions")
         .update({"title": title})
-        .eq("id", session_id)
+        .eq("id", sid)
         .execute()
     )
     return response.data
@@ -179,9 +220,12 @@ def update_chat_session_title(session_id: str, title: str):
 
 
 def save_message(session_id: str, role: str, content: str):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        raise ValueError("Invalid session_id")
     response = (
         supabase.table("chat_messages")
-        .insert({"session_id": session_id, "role": role, "content": content})
+        .insert({"session_id": sid, "role": role, "content": content})
         .execute()
     )
     return response.data[0]
@@ -190,11 +234,14 @@ def save_message(session_id: str, role: str, content: str):
 def save_message_with_metadata(
     session_id: str, role: str, content: str, metadata: dict[str, Any] | None = None
 ):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        raise ValueError("Invalid session_id")
     response = (
         supabase.table("chat_messages")
         .insert(
             {
-                "session_id": session_id,
+                "session_id": sid,
                 "role": role,
                 "content": content,
                 "metadata": metadata or {},
@@ -206,10 +253,13 @@ def save_message_with_metadata(
 
 
 def get_session_messages(session_id: str):
+    sid = sanitize_uuid(session_id)
+    if not sid:
+        return []
     response = (
         supabase.table("chat_messages")
         .select("*")
-        .eq("session_id", session_id)
+        .eq("session_id", sid)
         .order("created_at")
         .execute()
     )
@@ -233,7 +283,7 @@ def create_attachment_record(
     expires_at = datetime.now(timezone.utc) + timedelta(hours=settings.ATTACHMENTS_TTL_HOURS)
     payload = {
         "user_id": user_id,
-        "thread_id": thread_id,
+        "thread_id": sanitize_uuid(thread_id),
         "filename": filename,
         "mime_type": mime_type,
         "size_bytes": size_bytes,
@@ -247,10 +297,15 @@ def create_attachment_record(
 
 
 def get_attachment_by_id(attachment_id: str, user_id: str):
+    # Validate UUID to prevent Postgres errors (e.g. invalid input syntax for type uuid)
+    aid = sanitize_uuid(attachment_id)
+    if not aid:
+        return None
+
     response = (
         supabase.table("chat_attachments")
         .select("*")
-        .eq("id", attachment_id)
+        .eq("id", aid)
         .eq("user_id", user_id)
         .single()
         .execute()
@@ -259,6 +314,11 @@ def get_attachment_by_id(attachment_id: str, user_id: str):
 
 
 def get_attachments_for_thread(user_id: str, thread_id: str | None = None):
+    """
+    Fetch attachments for a user.
+    If thread_id is provided, filters by that thread.
+    If thread_id is None, returns 'unbound' attachments.
+    """
     query = (
         supabase.table("chat_attachments")
         .select("*")
@@ -266,21 +326,53 @@ def get_attachments_for_thread(user_id: str, thread_id: str | None = None):
         .is_("deleted_at", "null")
         .order("created_at", desc=True)
     )
-    if thread_id:
-        query = query.eq("thread_id", thread_id)
+    
+    tid = sanitize_uuid(thread_id)
+    if tid:
+        query = query.eq("thread_id", tid)
+    else:
+        query = query.is_("thread_id", "null")
+
     response = query.execute()
     return response.data
 
 
 def mark_attachment_deleted(attachment_id: str, user_id: str):
+    aid = sanitize_uuid(attachment_id)
+    if not aid:
+        return
     response = (
         supabase.table("chat_attachments")
         .update({"deleted_at": datetime.now(timezone.utc).isoformat()})
-        .eq("id", attachment_id)
+        .eq("id", aid)
         .eq("user_id", user_id)
         .execute()
     )
     return response.data
+
+
+def link_attachments_to_thread(attachment_ids: list[str], user_id: str, thread_id: str):
+    """
+    Persistently link a list of attachments to a thread.
+    Only links attachments that are currently 'unbound' (thread_id is null).
+    """
+    tid = sanitize_uuid(thread_id)
+    if not tid or not attachment_ids:
+        return
+    
+    valid_ids = [aid for aid in attachment_ids if is_valid_uuid(aid)]
+    if not valid_ids:
+        return
+
+    try:
+        supabase.table("chat_attachments") \
+            .update({"thread_id": tid}) \
+            .in_("id", valid_ids) \
+            .eq("user_id", user_id) \
+            .is_("thread_id", "null") \
+            .execute()
+    except Exception as exc:
+        print(f"[WARN] supabase: failed to link attachments to thread: {exc}")
 
 
 def get_expired_attachments():

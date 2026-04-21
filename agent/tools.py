@@ -4,17 +4,11 @@ from langchain_core.runnables import RunnableConfig
 from services.gmail import GmailService
 from services.attachments import load_attachments_for_user
 from services.store import save_memory, delete_memory
-from services.supabase import get_user_by_google_id
+from services.supabase import get_user_by_google_id, is_valid_uuid
 import uuid
 
 
-def _is_uuid_like(value: str) -> bool:
-    """Return True when the input is a UUID string."""
-    try:
-        uuid.UUID(str(value))
-        return True
-    except (ValueError, TypeError, AttributeError):
-        return False
+
 
 
 def _safe_tool_invoke(original_tool, args: dict, tool_name: str) -> str:
@@ -136,6 +130,12 @@ def send_email(
         user = get_user_by_google_id(google_id)
         if not user:
             return "Error: User is not authenticated or google_id is missing."
+        for aid in attachments:
+            if not is_valid_uuid(aid):
+                return (
+                    f"Error: '{aid}' is not a valid attachment ID. "
+                    "Use the exact ID shown in <uploaded_files>."
+                )
         try:
             loaded = load_attachments_for_user(
                 attachment_ids=attachments,
@@ -206,6 +206,12 @@ def create_draft(
         user = get_user_by_google_id(google_id)
         if not user:
             return "Error: User is not authenticated or google_id is missing."
+        for aid in attachments:
+            if not is_valid_uuid(aid):
+                return (
+                    f"Error: '{aid}' is not a valid attachment ID. "
+                    "Use the exact ID shown in <uploaded_files>."
+                )
         try:
             loaded = load_attachments_for_user(
                 attachment_ids=attachments,

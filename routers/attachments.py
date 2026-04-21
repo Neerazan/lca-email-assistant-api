@@ -97,40 +97,58 @@ async def upload_attachment(
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    content = await file.read()
-    content_size = len(content)
-    mime_type = file.content_type or "application/octet-stream"
-    safe_name = _sanitize_filename(file.filename or "attachment")
-    _assert_allowed_upload(safe_name, mime_type, content_size)
+    try:
+        content = await file.read()
+        content_size = len(content)
+        mime_type = file.content_type or "application/octet-stream"
+        safe_name = _sanitize_filename(file.filename or "attachment")
+        _assert_allowed_upload(safe_name, mime_type, content_size)
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[ERROR] upload_attachment: read/validate failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Sanitize thread_id
+    from services.supabase import sanitize_uuid
+    tid = sanitize_uuid(thread_id)
 
     try:
-        existing_files = get_attachments_for_thread(user["id"], thread_id)
+        # Only enforce the strict 5-file limit if we are already in a specific thread.
+        # This prevents 'stale' unbound files from blocking a fresh chat session.
+        if tid:
+            existing_files = get_attachments_for_thread(user["id"], tid)
+            if len(existing_files) >= settings.ATTACHMENTS_MAX_FILES_PER_MESSAGE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Attachment limit reached for this thread. "
+                        f"Max allowed is {settings.ATTACHMENTS_MAX_FILES_PER_MESSAGE}."
+                    ),
+                )
+    except HTTPException:
+        raise
     except Exception as exc:
+        print(f"[ERROR] upload_attachment: failed to fetch existing files: {exc}")
         _raise_if_missing_attachments_table(exc)
         raise
-    if len(existing_files) >= settings.ATTACHMENTS_MAX_FILES_PER_MESSAGE:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Attachment limit reached for this thread. "
-                f"Max allowed is {settings.ATTACHMENTS_MAX_FILES_PER_MESSAGE}."
-            ),
-        )
 
     checksum = hashlib.sha256(content).hexdigest()
     extension = os.path.splitext(safe_name)[1]
-    object_name = f"{user['id']}/{thread_id or 'unbound'}/{uuid4().hex}{extension}"
+    object_name = f"{user['id']}/{tid or 'unbound'}/{uuid4().hex}{extension}"
+
     try:
         ensure_attachments_bucket_exists()
         upload_attachment_object(object_name, content, mime_type)
     except Exception as exc:
+        print(f"[ERROR] upload_attachment: storage upload failed: {exc}")
         _raise_if_missing_attachments_bucket(exc)
         raise
 
     try:
         record = create_attachment_record(
             user_id=user["id"],
-            thread_id=thread_id,
+            thread_id=tid,
             filename=safe_name,
             mime_type=mime_type,
             size_bytes=content_size,
@@ -138,8 +156,15 @@ async def upload_attachment(
             storage_path=object_name,
         )
     except Exception as exc:
+        print(f"[ERROR] upload_attachment: failed to create record: {exc}")
+        # Cleanup storage if record creation fails
+        try:
+            delete_attachment_object(object_name)
+        except:
+            pass
         _raise_if_missing_attachments_table(exc)
         raise
+
     return {
         "id": record["id"],
         "filename": record["filename"],
@@ -159,7 +184,11 @@ async def list_attachments(request: Request, thread_id: str | None = None):
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized")
     try:
-        return get_attachments_for_thread(user["id"], thread_id)
+        # If thread_id is None, we want ALL user attachments (preserving old behavior)
+        # unless thread_id was explicitly passed as an empty string.
+        # But for list_attachments, usually it's either 'for this thread' or 'all'.
+        tid = thread_id if thread_id is not None else _ALL
+        return get_attachments_for_thread(user["id"], tid)
     except Exception as exc:
         _raise_if_missing_attachments_table(exc)
         raise
