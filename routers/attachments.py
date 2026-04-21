@@ -108,6 +108,7 @@ async def upload_attachment(
 
     # Sanitize thread_id
     from services.supabase import sanitize_uuid
+
     tid = sanitize_uuid(thread_id)
 
     try:
