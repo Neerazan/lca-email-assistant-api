@@ -17,6 +17,7 @@ from services.supabase import (
     mark_attachment_deleted,
     upload_attachment_object,
 )
+from services.auth_helpers import get_current_user_id, verify_attachment_ownership
 from utils.config import settings
 from storage3.exceptions import StorageApiError
 
@@ -91,11 +92,7 @@ async def upload_attachment(
     file: UploadFile = File(...),
     thread_id: str | None = Form(default=None),
 ):
-    user_payload = getattr(request.state, "user", None)
-    google_id = user_payload.get("sub") if user_payload else None
-    user = get_user_by_google_id(google_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    user_id = get_current_user_id(request)
 
     try:
         content = await file.read()
@@ -117,7 +114,7 @@ async def upload_attachment(
         # Only enforce the strict 5-file limit if we are already in a specific thread.
         # This prevents 'stale' unbound files from blocking a fresh chat session.
         if tid:
-            existing_files = get_attachments_for_thread(user["id"], tid)
+            existing_files = get_attachments_for_thread(user_id, tid)
             if len(existing_files) >= settings.ATTACHMENTS_MAX_FILES_PER_MESSAGE:
                 raise HTTPException(
                     status_code=400,
@@ -135,7 +132,7 @@ async def upload_attachment(
 
     checksum = hashlib.sha256(content).hexdigest()
     extension = os.path.splitext(safe_name)[1]
-    object_name = f"{user['id']}/{tid or 'unbound'}/{uuid4().hex}{extension}"
+    object_name = f"{user_id}/{tid or 'unbound'}/{uuid4().hex}{extension}"
 
     try:
         ensure_attachments_bucket_exists()
@@ -147,7 +144,7 @@ async def upload_attachment(
 
     try:
         record = create_attachment_record(
-            user_id=user["id"],
+            user_id=user_id,
             thread_id=tid,
             filename=safe_name,
             mime_type=mime_type,
@@ -178,17 +175,11 @@ async def upload_attachment(
 
 @router.get("")
 async def list_attachments(request: Request, thread_id: str | None = None):
-    user_payload = getattr(request.state, "user", None)
-    google_id = user_payload.get("sub") if user_payload else None
-    user = get_user_by_google_id(google_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    user_id = get_current_user_id(request)
     try:
-        # If thread_id is None, we want ALL user attachments (preserving old behavior)
-        # unless thread_id was explicitly passed as an empty string.
-        # But for list_attachments, usually it's either 'for this thread' or 'all'.
-        tid = thread_id if thread_id is not None else _ALL
-        return get_attachments_for_thread(user["id"], tid)
+        # If thread_id is None, we default to 'all' for this endpoint
+        tid = thread_id if thread_id is not None else "all"
+        return get_attachments_for_thread(user_id, tid)
     except Exception as exc:
         _raise_if_missing_attachments_table(exc)
         raise
@@ -196,20 +187,15 @@ async def list_attachments(request: Request, thread_id: str | None = None):
 
 @router.delete("/{attachment_id}")
 async def delete_attachment(attachment_id: str, request: Request):
-    user_payload = getattr(request.state, "user", None)
-    google_id = user_payload.get("sub") if user_payload else None
-    user = get_user_by_google_id(google_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
+    user_id = get_current_user_id(request)
     try:
-        attachment = get_attachment_by_id(attachment_id=attachment_id, user_id=user["id"])
+        attachment = verify_attachment_ownership(attachment_id, user_id)
     except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
         _raise_if_missing_attachments_table(exc)
         raise
-    if not attachment:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
 
     delete_attachment_object(attachment["storage_path"])
-    mark_attachment_deleted(attachment_id=attachment_id, user_id=user["id"])
+    mark_attachment_deleted(attachment_id=attachment_id, user_id=user_id)
     return {"success": True, "id": attachment_id}

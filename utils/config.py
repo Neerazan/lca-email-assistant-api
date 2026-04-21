@@ -4,6 +4,8 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     APP_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"
+    ENVIRONMENT: str = "development" # "development" or "production"
+    LOG_DIR: str = "logs"
 
     OPENAI_API_KEY: str
 

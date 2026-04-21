@@ -1,11 +1,15 @@
+import logging
+import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from middlewares.auth import AuthMiddleware
 from routers import attachments, auth, chat, preferences
 from services.store import store
 from utils.config import settings
 from services.db import shared_pool
+from utils.config import settings
+from utils.logger import setup_logging, log_requests_middleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -24,15 +28,20 @@ async def lifespan(app: FastAPI):
     yield
     # Cleanup: close the shared connection pool
     await shared_pool.close()
+    logging.info("Application shutdown complete")
 
+# Configure logging
+logger = setup_logging()
 
 app = FastAPI(title="AI Email Assistant", version="1.0.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    return await log_requests_middleware(request, call_next)
 
 # Note: Middlewares are executed in reverse order of how they are added.
 # If we add CORS last, it executes first on incoming requests.
 app.add_middleware(AuthMiddleware)
-
-# CORS — allow your frontend to talk to this backend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.FRONTEND_URL],

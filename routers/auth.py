@@ -111,7 +111,7 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
         key="app_refresh_token",
         value=app_refresh_token,
         httponly=True,
-        secure=False,  # False for localhost HTTP; use True in production with HTTPS
+        secure=settings.ENVIRONMENT == "production",
         samesite="lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
     )
@@ -167,6 +167,6 @@ def logout(response: Response):
         key="app_refresh_token",
         httponly=True,
         samesite="lax",
-        secure=False,  # Match the flag used in set_cookie
+        secure=settings.ENVIRONMENT == "production",
     )
     return {"message": "Logged out successfully"}

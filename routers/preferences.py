@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Depends, HTTPException
 from services.preferences import get_user_preferences, upsert_user_preferences
 from services.store import reset_memories
 from services.supabase import get_user_by_google_id
+from services.auth_helpers import verify_google_id_match
 from pydantic import BaseModel
 from typing import Optional
 
@@ -24,7 +25,7 @@ class UserPreferencesUpdate(BaseModel):
 
 @router.get("/{google_id}")
 async def get_prefs(google_id: str, request: Request):
-    # Verify auth (optional, but good practice)
+    verify_google_id_match(request, google_id)
     user = get_user_by_google_id(google_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -34,6 +35,7 @@ async def get_prefs(google_id: str, request: Request):
 
 @router.put("/{google_id}")
 async def update_prefs(google_id: str, data: UserPreferencesUpdate, request: Request):
+    verify_google_id_match(request, google_id)
     user = get_user_by_google_id(google_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -46,6 +48,7 @@ async def update_prefs(google_id: str, data: UserPreferencesUpdate, request: Req
 
 @router.delete("/{google_id}/memory")
 async def clear_memory(google_id: str, request: Request):
+    verify_google_id_match(request, google_id)
     user = get_user_by_google_id(google_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")

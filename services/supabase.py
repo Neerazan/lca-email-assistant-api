@@ -318,11 +318,17 @@ def get_attachments_for_thread(user_id: str, thread_id: str | None = None):
         .order("created_at", desc=True)
     )
     
-    tid = sanitize_uuid(thread_id)
-    if tid:
-        query = query.eq("thread_id", tid)
-    else:
+    if thread_id == "all":
+        # No additional filtering, returns all user attachments
+        pass
+    elif thread_id is None:
         query = query.is_("thread_id", "null")
+    else:
+        tid = sanitize_uuid(thread_id)
+        if tid:
+            query = query.eq("thread_id", tid)
+        else:
+            query = query.is_("thread_id", "null")
 
     response = query.execute()
     return response.data

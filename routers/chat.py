@@ -1,4 +1,5 @@
 """FastAPI router for the AI email assistant chat endpoints."""
+
 from __future__ import annotations
 
 import asyncio
@@ -29,12 +30,13 @@ from services.supabase import (
     save_message_with_metadata,
     update_chat_session_title,
 )
+from services.auth_helpers import get_current_user_id, verify_session_ownership
 from utils.config import settings
 
 router = APIRouter()
 
 title_llm = ChatOpenAI(
-    model="gpt-4.1-nano",
+    model="gpt-4o-mini",
     temperature=0,
     api_key=settings.OPENAI_API_KEY,
 )
@@ -247,11 +249,13 @@ async def chat_stream(req: ChatRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
-
         # ── 1. Auth ──────────────────────────────────────────────────────────
-        user = get_user_by_google_id(google_id) if google_id else None
-        if not user:
-            yield _sse_event({"type": "error", "error": "Unauthorized"})
+        try:
+            user_id = get_current_user_id(request)
+            # Verify that the user owns the thread they are trying to chat in
+            verify_session_ownership(req.thread_id, user_id)
+        except Exception as exc:
+            yield _sse_event({"type": "error", "error": str(exc)})
             yield _sse_event({"type": "done"})
             return
 
@@ -262,7 +266,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         try:
             # Fetch all attachments already linked to this thread
             existing_attachments = get_attachments_for_thread(
-                user_id=user["id"], thread_id=req.thread_id
+                user_id=user_id, thread_id=req.thread_id
             )
             existing_ids = [a["id"] for a in existing_attachments]
 
@@ -273,7 +277,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             if all_ids:
                 extracted_attachments = load_and_extract_attachments(
                     attachment_ids=all_ids,
-                    user_id=user["id"],
+                    user_id=user_id,
                     thread_id=req.thread_id,
                 )
 
@@ -282,7 +286,7 @@ async def chat_stream(req: ChatRequest, request: Request):
                 if req_ids:
                     link_attachments_to_thread(
                         attachment_ids=req_ids,
-                        user_id=user["id"],
+                        user_id=user_id,
                         thread_id=req.thread_id,
                     )
         except Exception as exc:
@@ -302,7 +306,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         #   human_content  = [text block, ...image vision blocks]
         #   trimmed_history = previous messages, filtered + trimmed safely
         system_msg, human_content, trimmed_history = await build_prompt_parts(
-            user_id=user["id"],
+            user_id=user_id,
             human_text=req.message,
             extracted_attachments=extracted_attachments,
             message_history=history,
@@ -417,11 +421,12 @@ async def chat_resume(req: ResumeRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
-
         # ── Auth ─────────────────────────────────────────────────────────────
-        user = get_user_by_google_id(google_id) if google_id else None
-        if not user:
-            yield _sse_event({"type": "error", "error": "Unauthorized"})
+        try:
+            user_id = get_current_user_id(request)
+            verify_session_ownership(req.thread_id, user_id)
+        except Exception as exc:
+            yield _sse_event({"type": "error", "error": str(exc)})
             yield _sse_event({"type": "done"})
             return
 
@@ -431,12 +436,12 @@ async def chat_resume(req: ResumeRequest, request: Request):
         extracted_attachments = []
         try:
             existing_attachments = get_attachments_for_thread(
-                user_id=user["id"], thread_id=req.thread_id
+                user_id=user_id, thread_id=req.thread_id
             )
             if existing_attachments:
                 extracted_attachments = load_and_extract_attachments(
                     attachment_ids=[a["id"] for a in existing_attachments],
-                    user_id=user["id"],
+                    user_id=user_id,
                     thread_id=req.thread_id,
                 )
         except Exception as exc:
@@ -444,7 +449,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
 
         # Fresh system prompt including attachment metadata
         system_msg, _, _ = await build_prompt_parts(
-            user_id=user["id"],
+            user_id=user_id,
             human_text="",
             extracted_attachments=extracted_attachments,
         )
@@ -518,28 +523,23 @@ async def chat_resume(req: ResumeRequest, request: Request):
 @router.get("/sessions")
 def get_sessions(request: Request):
     """Returns all chat sessions for the authenticated user."""
-    user_payload = getattr(request.state, "user", None)
-    google_id = user_payload.get("sub") if user_payload else None
-    if not google_id:
-        return []
-    user = get_user_by_google_id(google_id=google_id)
-    return get_user_sessions(user["id"]) if user else []
+    user_id = get_current_user_id(request)
+    return get_user_sessions(user_id)
 
 
 @router.post("/sessions")
 async def create_session(request: Request):
     """Create a new chat session."""
-    user_payload = getattr(request.state, "user", None)
-    google_id = user_payload.get("sub") if user_payload else None
-    user = get_user_by_google_id(google_id)
-    return create_chat_session(user["id"], title="New Chat")
+    user_id = get_current_user_id(request)
+    return create_chat_session(user_id, title="New Chat")
 
 
 @router.get("/sessions/{session_id}/messages")
 async def get_messages(session_id: str, request: Request):
     """Return all messages for a specific session."""
-    if not getattr(request.state, "user", None):
-        return []
+    user_id = get_current_user_id(request)
+    verify_session_ownership(session_id, user_id)
+
     return [
         {
             "role": msg["role"],
@@ -553,7 +553,8 @@ async def get_messages(session_id: str, request: Request):
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str, request: Request):
     """Delete a chat session."""
-    if not getattr(request.state, "user", None):
-        return {"success": False, "error": "Unauthorized"}
+    user_id = get_current_user_id(request)
+    verify_session_ownership(session_id, user_id)
+
     delete_chat_session(session_id)
     return {"success": True}
