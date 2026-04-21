@@ -11,6 +11,7 @@ PUBLIC_PATHS = [
     "/redoc",
     "/auth/google/code",
     "/auth/refresh",
+    "/auth/logout",
 ]
 
 class AuthMiddleware(BaseHTTPMiddleware):

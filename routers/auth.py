@@ -163,5 +163,10 @@ def logout(response: Response):
     Clear the HttpOnly refresh token cookie.
     The frontend should also discard the access_token in memory.
     """
-    response.delete_cookie("app_refresh_token")
+    response.delete_cookie(
+        key="app_refresh_token",
+        httponly=True,
+        samesite="lax",
+        secure=False,  # Match the flag used in set_cookie
+    )
     return {"message": "Logged out successfully"}
