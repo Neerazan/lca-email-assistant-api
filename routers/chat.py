@@ -40,11 +40,6 @@ title_llm = ChatOpenAI(
 )
 
 
-# ---------------------------------------------------------------------------
-# Request / Response models
-# ---------------------------------------------------------------------------
-
-
 class AttachmentRef(BaseModel):
     attachment_id: str
     filename: str | None = None
@@ -62,11 +57,7 @@ class ResumeRequest(BaseModel):
     decisions: list[dict]
 
 
-# ---------------------------------------------------------------------------
-# SSE helpers
-# ---------------------------------------------------------------------------
-
-
+# SSE Helpers
 def _sse_event(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -78,11 +69,7 @@ def _safe_stream_error() -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# LangGraph config
-# ---------------------------------------------------------------------------
-
-
+# Langgraph Config
 def _get_langgraph_config(google_id: str | None, thread_id: str) -> dict:
     return {"configurable": {"google_id": google_id, "thread_id": thread_id}}
 
@@ -101,9 +88,7 @@ async def _get_history_from_state(config: dict) -> list:
         return []
 
 
-# ---------------------------------------------------------------------------
 # Shared streaming generator
-# ---------------------------------------------------------------------------
 
 # Internal sentinel key used to pass the accumulated response through the
 # generator without breaking the SSE byte stream.
@@ -172,11 +157,7 @@ async def _collect_stream(
     return sse_chunks, assistant_response
 
 
-# ---------------------------------------------------------------------------
 # HITL interrupt helper
-# ---------------------------------------------------------------------------
-
-
 def _extract_interrupt_events(state_tasks) -> list[str]:
     """
     Inspect LangGraph state tasks for HITL interrupts.
@@ -194,11 +175,7 @@ def _extract_interrupt_events(state_tasks) -> list[str]:
     return events
 
 
-# ---------------------------------------------------------------------------
 # Session title generation
-# ---------------------------------------------------------------------------
-
-
 def _normalize_title(raw_title: str) -> str:
     text = (raw_title or "").strip().strip("\"'")
     text = re.sub(r"\s+", " ", text)
@@ -246,11 +223,7 @@ async def _generate_and_store_session_title(
         )
 
 
-# ---------------------------------------------------------------------------
 # POST /stream
-# ---------------------------------------------------------------------------
-
-
 @router.post("/stream")
 async def chat_stream(req: ChatRequest, request: Request):
     """
@@ -430,11 +403,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# ---------------------------------------------------------------------------
 # POST /resume
-# ---------------------------------------------------------------------------
-
-
 @router.post("/resume")
 async def chat_resume(req: ResumeRequest, request: Request):
     """
@@ -545,11 +514,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
-# ---------------------------------------------------------------------------
 # Session endpoints
-# ---------------------------------------------------------------------------
-
-
 @router.get("/sessions")
 def get_sessions(request: Request):
     """Returns all chat sessions for the authenticated user."""

@@ -1,9 +1,3 @@
-"""
-Google OAuth utilities:
-  - Verify Google id_tokens using Google's public keys
-  - Refresh access_tokens using a stored refresh_token
-"""
-
 import httpx
 from google.oauth2 import id_token as google_id_token
 from google.auth.transport import requests as google_requests

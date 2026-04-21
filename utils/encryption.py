@@ -1,10 +1,3 @@
-"""
-Fernet-based symmetric encryption for sensitive tokens (e.g., refresh_token).
-
-Uses a key derived from the application's ENCRYPTION_KEY env var.
-The key is stretched to a valid 32-byte Fernet key via SHA-256 + base64.
-"""
-
 import base64
 import hashlib
 

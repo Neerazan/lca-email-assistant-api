@@ -1,12 +1,3 @@
-"""
-Supabase service layer — all database operations.
-
-Tables used:
-  - users: identity + encrypted OAuth tokens (consolidated)
-  - chat_sessions: conversation sessions per user
-  - chat_messages: messages within sessions
-"""
-
 from datetime import datetime, timedelta, timezone
 from typing import Any
 import uuid
