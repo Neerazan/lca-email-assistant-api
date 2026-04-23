@@ -38,6 +38,7 @@ router = APIRouter()
 title_llm = ChatOpenAI(
     model="gpt-4o-mini",
     temperature=0,
+    streaming=False,
     api_key=settings.OPENAI_API_KEY,
 )
 
@@ -132,31 +133,7 @@ async def _stream_agent_events(inputs_or_command, config: dict):
         yield json.dumps({_SENTINEL_KEY: assistant_response})
 
 
-async def _collect_stream(
-    inputs_or_command,
-    config: dict,
-):
-    """
-    Drives _stream_agent_events and separates SSE chunks from the sentinel.
 
-    Returns:
-        sse_chunks        — list of SSE strings ready to yield to the client
-        assistant_response — the full accumulated assistant text
-    """
-    sse_chunks: list[str] = []
-    assistant_response = ""
-
-    async for chunk in _stream_agent_events(inputs_or_command, config):
-        try:
-            parsed = json.loads(chunk)
-            if _SENTINEL_KEY in parsed:
-                assistant_response = parsed[_SENTINEL_KEY]
-                continue
-        except (json.JSONDecodeError, TypeError):
-            pass
-        sse_chunks.append(chunk)
-
-    return sse_chunks, assistant_response
 
 
 # HITL interrupt helper
@@ -194,9 +171,14 @@ async def _generate_and_store_session_title(
     """
     Lazily generate a descriptive session title for 'New Chat' sessions.
     Fires as a background task — failure is logged but never raises.
+
+    The sync Supabase calls are offloaded to a thread so they never
+    block the main event loop.
     """
     try:
-        session = get_chat_session(session_id)
+        loop = asyncio.get_running_loop()
+
+        session = await loop.run_in_executor(None, get_chat_session, session_id)
         if not session or (session.get("title") or "").strip() != "New Chat":
             return
 
@@ -218,7 +200,9 @@ async def _generate_and_store_session_title(
         result = await title_llm.ainvoke(prompt)
         title = _normalize_title(getattr(result, "content", "") or "")
         if title and title != "New Chat":
-            update_chat_session_title(session_id, title)
+            await loop.run_in_executor(
+                None, update_chat_session_title, session_id, title
+            )
     except Exception as exc:
         print(
             f"[ERROR] chat: title generation failed for session_id={session_id}: {exc}"
@@ -339,12 +323,18 @@ async def chat_stream(req: ChatRequest, request: Request):
             ]
         }
 
-        # ── 6. Stream agent ──────────────────────────────────────────────────
+        # ── 6. Stream agent (yield tokens directly — no buffering) ────────
         assistant_response = ""
         stream_error = False
         try:
-            sse_chunks, assistant_response = await _collect_stream(inputs, config)
-            for chunk in sse_chunks:
+            async for chunk in _stream_agent_events(inputs, config):
+                try:
+                    parsed = json.loads(chunk)
+                    if _SENTINEL_KEY in parsed:
+                        assistant_response = parsed[_SENTINEL_KEY]
+                        continue
+                except (json.JSONDecodeError, TypeError):
+                    pass
                 yield chunk
 
         except Exception as exc:
@@ -366,15 +356,16 @@ async def chat_stream(req: ChatRequest, request: Request):
                         role="assistant",
                         content=assistant_response,
                     )
-                    session_msgs = get_session_messages(req.thread_id)
-                    if len(session_msgs) <= 2:
-                        asyncio.create_task(
-                            _generate_and_store_session_title(
-                                session_id=req.thread_id,
-                                user_message=req.message,
-                                assistant_message=assistant_response,
-                            )
+                    # Fire title generation as a fully async background task.
+                    # The task itself checks message count and session title,
+                    # so we avoid the blocking get_session_messages call here.
+                    asyncio.create_task(
+                        _generate_and_store_session_title(
+                            session_id=req.thread_id,
+                            user_message=req.message,
+                            assistant_message=assistant_response,
                         )
+                    )
                 except Exception as exc:
                     print(
                         f"[ERROR] chat: failed to persist assistant message "
@@ -459,12 +450,18 @@ async def chat_resume(req: ResumeRequest, request: Request):
             update={"messages": [system_msg]},
         )
 
-        # ── Stream resumed agent ─────────────────────────────────────────────
+        # ── Stream resumed agent (yield tokens directly) ──────────────────
         assistant_response = ""
         stream_error = False
         try:
-            sse_chunks, assistant_response = await _collect_stream(command, config)
-            for chunk in sse_chunks:
+            async for chunk in _stream_agent_events(command, config):
+                try:
+                    parsed = json.loads(chunk)
+                    if _SENTINEL_KEY in parsed:
+                        assistant_response = parsed[_SENTINEL_KEY]
+                        continue
+                except (json.JSONDecodeError, TypeError):
+                    pass
                 yield chunk
 
         except Exception as exc:

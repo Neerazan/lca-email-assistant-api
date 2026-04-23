@@ -7,6 +7,8 @@ safe message history for each LangGraph turn.
 
 from __future__ import annotations
 
+import tiktoken
+
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -15,12 +17,10 @@ from langchain_core.messages import (
     filter_messages,
     trim_messages,
 )
-from langchain_openai import ChatOpenAI
 
 from services.attachment_extractor import AttachmentKind, ExtractedAttachment
 from services.preferences import get_user_preferences
 from services.store import get_memories
-from utils.config import settings
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -29,10 +29,19 @@ from utils.config import settings
 _MAX_TEXT_CHARS = 12_000
 _MAX_HISTORY_TOKENS = 28_000
 
-_token_counter = ChatOpenAI(
-    model="gpt-4.1-nano",
-    api_key=settings.OPENAI_API_KEY,
-)
+# Use tiktoken for instant local token counting instead of making API calls
+_tokenizer = tiktoken.encoding_for_model("gpt-4o")
+
+
+def _count_message_tokens(messages: list[BaseMessage]) -> int:
+    """Count tokens locally using tiktoken. Fast and offline."""
+    total = 0
+    for msg in messages:
+        content = msg.content if isinstance(msg.content, str) else str(msg.content)
+        total += len(_tokenizer.encode(content))
+        # Approximate overhead per message (role, separators)
+        total += 4
+    return total
 
 # ---------------------------------------------------------------------------
 # Prompt template
@@ -266,7 +275,7 @@ def _prepare_history(history: list[BaseMessage]) -> list[BaseMessage]:
         trimmed = trim_messages(
             filtered,
             max_tokens=_MAX_HISTORY_TOKENS,
-            token_counter=_token_counter,
+            token_counter=_count_message_tokens,
             strategy="last",
             start_on="human",
             include_system=False,

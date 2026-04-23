@@ -1,6 +1,7 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
+
 from utils.security import verify_access_token
 
 # Define routes that don't need authentication
@@ -14,34 +15,64 @@ PUBLIC_PATHS = [
     "/auth/logout",
 ]
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+
+class AuthMiddleware:
+    """
+    Pure ASGI auth middleware.
+
+    Unlike BaseHTTPMiddleware this does NOT buffer StreamingResponse bodies,
+    which is essential for SSE / token-by-token streaming to work.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         # Allow OPTIONS requests for CORS
-        if request.method == "OPTIONS":
-            return await call_next(request)
+        method = scope.get("method", "")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
 
         # Check if the path is in the PUBLIC_PATHS
-        if request.url.path in PUBLIC_PATHS:
-            return await call_next(request)
-            
-        # Check Authorization header
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Missing or invalid authentication token"}
-            )
-            
-        token = auth_header.split(" ")[1]
-        try:
-            # We can attach the payload to request.state.user
-            payload = verify_access_token(token)
-            request.state.user = payload
-        except Exception:
-            # verify_access_token raises HTTPException, returning a 401 response instead
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or expired token"}
-            )
+        path = scope.get("path", "")
+        if path in PUBLIC_PATHS:
+            await self.app(scope, receive, send)
+            return
 
-        return await call_next(request)
+        # Parse headers from the raw ASGI scope
+        headers = dict(
+            (k.decode("latin-1").lower(), v.decode("latin-1"))
+            for k, v in scope.get("headers", [])
+        )
+        auth_header = headers.get("authorization", "")
+
+        if not auth_header or not auth_header.startswith("Bearer "):
+            response = JSONResponse(
+                status_code=401,
+                content={"detail": "Missing or invalid authentication token"},
+            )
+            await response(scope, receive, send)
+            return
+
+        token = auth_header.split(" ", 1)[1]
+        try:
+            payload = verify_access_token(token)
+        except Exception:
+            response = JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or expired token"},
+            )
+            await response(scope, receive, send)
+            return
+
+        # Attach user payload to scope["state"] so request.state.user works
+        if "state" not in scope:
+            scope["state"] = {}
+        scope["state"]["user"] = payload
+
+        await self.app(scope, receive, send)
