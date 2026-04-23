@@ -99,6 +99,19 @@ def upsert_user(
     return response.data
 
 
+def delete_user(google_id: str):
+    """
+    Permanently delete a user record by their Google ID.
+    """
+    response = (
+        supabase.table("users")
+        .delete()
+        .eq("google_id", google_id)
+        .execute()
+    )
+    return response.data
+
+
 # ---------------------------------------------------------------------------
 # Token operations (stored on the users table, not a separate table)
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, Depends, HTTPException
+from fastapi import APIRouter, Request, Depends, HTTPException, Response
 from services.preferences import get_user_preferences, upsert_user_preferences
 from services.store import reset_memories
 from services.supabase import get_user_by_google_id
@@ -55,3 +55,28 @@ async def clear_memory(google_id: str, request: Request):
     
     await reset_memories(user["id"])
     return {"success": True}
+
+@router.delete("/{google_id}")
+async def delete_account(google_id: str, request: Request, response: Response):
+    """
+    Permanently delete the user account and clear session cookies.
+    """
+    from services.supabase import delete_user
+    from utils.config import settings
+
+    verify_google_id_match(request, google_id)
+    
+    # 1. Delete user from Supabase
+    delete_user(google_id)
+
+    # 2. Clear the app_refresh_token cookie
+    is_prod = settings.ENVIRONMENT == "production"
+    response.delete_cookie(
+        "app_refresh_token",
+        httponly=True,
+        samesite="none" if is_prod else "lax",
+        secure=is_prod,
+        path="/",
+    )
+
+    return {"success": True, "message": "Account deleted successfully"}

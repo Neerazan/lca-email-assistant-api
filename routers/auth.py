@@ -144,7 +144,19 @@ def refresh_token(request: Request, response: Response):
         try:
             user = get_user_by_google_id(google_id)
         except Exception:
-            user = {}
+            user = None
+
+        if not user:
+             # If user is gone, clear the cookie and reject
+             is_prod = settings.ENVIRONMENT == "production"
+             response.delete_cookie(
+                "app_refresh_token",
+                httponly=True,
+                samesite="none" if is_prod else "lax",
+                secure=is_prod,
+                path="/",
+             )
+             raise HTTPException(status_code=401, detail="User no longer exists")
 
         # Issue a new access token
         new_access_token = create_access_token(data={
@@ -163,6 +175,7 @@ def refresh_token(request: Request, response: Response):
             httponly=True,
             samesite="none" if is_prod else "lax",
             secure=is_prod,
+            path="/",
         )
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
@@ -179,5 +192,6 @@ def logout(response: Response):
         httponly=True,
         samesite="none" if is_prod else "lax",
         secure=is_prod,
+        path="/",
     )
     return {"message": "Logged out successfully"}
