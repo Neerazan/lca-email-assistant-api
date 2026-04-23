@@ -7,8 +7,6 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development" # "development" or "production"
     LOG_DIR: str = "logs"
 
-    OPENAI_API_KEY: str
-
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
     SUPABASE_SERVICE_ROLE_KEY: str
