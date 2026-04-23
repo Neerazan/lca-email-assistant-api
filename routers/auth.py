@@ -107,12 +107,16 @@ async def google_auth_code(payload: AuthCodePayload, response: Response):
     app_refresh_token = create_refresh_token(data={"sub": google_id, "email": email})
 
     # 6. Set HttpOnly cookie for the refresh token
+    # In production, frontend & backend are on different domains (cross-site),
+    # so SameSite must be "none" (with Secure=True) for the browser to include
+    # the cookie on cross-site fetch requests with credentials: "include".
+    is_prod = settings.ENVIRONMENT == "production"
     response.set_cookie(
         key="app_refresh_token",
         value=app_refresh_token,
         httponly=True,
-        secure=settings.ENVIRONMENT == "production",
-        samesite="lax",
+        secure=is_prod,
+        samesite="none" if is_prod else "lax",
         max_age=settings.REFRESH_TOKEN_EXPIRE_MINUTES * 60,
     )
 
@@ -153,7 +157,13 @@ def refresh_token(request: Request, response: Response):
         return {"access_token": new_access_token}
     except Exception:
         # If token is invalid/expired, clear the cookie
-        response.delete_cookie("app_refresh_token")
+        is_prod = settings.ENVIRONMENT == "production"
+        response.delete_cookie(
+            "app_refresh_token",
+            httponly=True,
+            samesite="none" if is_prod else "lax",
+            secure=is_prod,
+        )
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
 
@@ -163,10 +173,11 @@ def logout(response: Response):
     Clear the HttpOnly refresh token cookie.
     The frontend should also discard the access_token in memory.
     """
+    is_prod = settings.ENVIRONMENT == "production"
     response.delete_cookie(
         key="app_refresh_token",
         httponly=True,
-        samesite="lax",
-        secure=settings.ENVIRONMENT == "production",
+        samesite="none" if is_prod else "lax",
+        secure=is_prod,
     )
     return {"message": "Logged out successfully"}
