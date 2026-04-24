@@ -12,9 +12,7 @@ You can check out the live frontend project that this backend powers here: **[AI
 
 Curious about how it all fits together? Here's a quick demo video showing the full project in action:
 
-<div align="center">
-  <iframe width="560" height="315" src="https://www.youtube.com/embed/ZkKSU_7UJYc" title="AI Email Assistant Demo Video" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
-</div>
+[![AI Email Assistant Demo Video](https://img.youtube.com/vi/ZkKSU_7UJYc/maxresdefault.jpg)](https://www.youtube.com/watch?v=ZkKSU_7UJYc)
 
 ---
 
