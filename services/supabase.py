@@ -40,11 +40,7 @@ def sanitize_uuid(val: Any) -> str | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # User operations
-# ---------------------------------------------------------------------------
-
-
 def get_user_by_google_id(google_id: str):
     """Fetch a user record by their Google ID (the 'sub' claim)."""
     response = (
@@ -112,11 +108,7 @@ def delete_user(google_id: str):
     return response.data
 
 
-# ---------------------------------------------------------------------------
 # Token operations (stored on the users table, not a separate table)
-# ---------------------------------------------------------------------------
-
-
 def save_user_tokens(
     google_id: str,
     access_token: str | None = None,
@@ -156,11 +148,8 @@ def get_user_tokens(google_id: str):
     return response.data
 
 
-# ---------------------------------------------------------------------------
+
 # Chat session operations
-# ---------------------------------------------------------------------------
-
-
 def create_chat_session(user_id: str, title: str = "New Chat"):
     response = (
         supabase.table("chat_sessions")
@@ -218,11 +207,7 @@ def update_chat_session_title(session_id: str, title: str):
     return response.data
 
 
-# ---------------------------------------------------------------------------
 # Chat message operations
-# ---------------------------------------------------------------------------
-
-
 def save_message(session_id: str, role: str, content: str):
     sid = sanitize_uuid(session_id)
     if not sid:
@@ -270,11 +255,7 @@ def get_session_messages(session_id: str):
     return response.data
 
 
-# ---------------------------------------------------------------------------
 # Attachment operations
-# ---------------------------------------------------------------------------
-
-
 def create_attachment_record(
     user_id: str,
     thread_id: str | None,

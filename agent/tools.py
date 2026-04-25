@@ -5,10 +5,6 @@ from services.gmail import GmailService
 from services.attachments import load_attachments_for_user
 from services.store import save_memory, delete_memory
 from services.supabase import get_user_by_google_id, is_valid_uuid
-import uuid
-
-
-
 
 
 def _safe_tool_invoke(original_tool, args: dict, tool_name: str) -> str:

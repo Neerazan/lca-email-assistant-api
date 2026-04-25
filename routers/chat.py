@@ -23,7 +23,6 @@ from services.supabase import (
     get_attachments_for_thread,
     get_chat_session,
     get_session_messages,
-    get_user_by_google_id,
     get_user_sessions,
     link_attachments_to_thread,
     save_message,
@@ -233,7 +232,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
-        # ── 1. Auth ──────────────────────────────────────────────────────────
+        # 1. Auth
         try:
             user_id = get_current_user_id(request)
             # Verify that the user owns the thread they are trying to chat in
@@ -245,7 +244,7 @@ async def chat_stream(req: ChatRequest, request: Request):
 
         config = _get_langgraph_config(google_id, req.thread_id)
 
-        # ── 2. Extract attachments (New + Existing in thread) ────────────────
+        #  2. Extract attachments (New + Existing in thread)
         extracted_attachments = []
         try:
             # Fetch all attachments already linked to this thread
@@ -282,10 +281,10 @@ async def chat_stream(req: ChatRequest, request: Request):
                 yield _sse_event({"type": "done"})
                 return
 
-        # ── 3. Fetch history from checkpointer ───────────────────────────────
+        # 3. Fetch history from checkpointer
         history = await _get_history_from_state(config)
 
-        # ── 4. Build prompt parts ────────────────────────────────────────────
+        # 4. Build prompt parts
         #   system_msg     = fully rendered SystemMessage
         #   human_content  = [text block, ...image vision blocks]
         #   trimmed_history = previous messages, filtered + trimmed safely
@@ -296,7 +295,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             message_history=history,
         )
 
-        # ── 5. Persist user message ──────────────────────────────────────────
+        # 5. Persist user message
         save_message_with_metadata(
             session_id=req.thread_id,
             role="user",
@@ -323,7 +322,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             ]
         }
 
-        # ── 6. Stream agent (yield tokens directly — no buffering) ────────
+        # 6. Stream agent (yield tokens directly — no buffering)
         assistant_response = ""
         stream_error = False
         try:
@@ -348,7 +347,7 @@ async def chat_stream(req: ChatRequest, request: Request):
             yield _sse_event({"type": "done"})
 
         finally:
-            # ── 7. Persist assistant response ────────────────────────────────
+            # 7. Persist assistant response
             if assistant_response:
                 try:
                     save_message(
@@ -375,7 +374,7 @@ async def chat_stream(req: ChatRequest, request: Request):
         if stream_error:
             return
 
-        # ── 8 & 9. Check for HITL interrupt ─────────────────────────────────
+        # 8 & 9. Check for HITL interrupt
         try:
             state = await agent.aget_state(config)
         except Exception as exc:
@@ -412,7 +411,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
     google_id = user_payload.get("sub") if user_payload else None
 
     async def event_generator():
-        # ── Auth ─────────────────────────────────────────────────────────────
+        #  Auth
         try:
             user_id = get_current_user_id(request)
             verify_session_ownership(req.thread_id, user_id)
@@ -423,7 +422,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
 
         config = _get_langgraph_config(google_id, req.thread_id)
 
-        # ── 2. Re-fetch all thread attachments for prompt context ────────────
+        # 2. Re-fetch all thread attachments for prompt context
         extracted_attachments = []
         try:
             existing_attachments = get_attachments_for_thread(
@@ -450,7 +449,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
             update={"messages": [system_msg]},
         )
 
-        # ── Stream resumed agent (yield tokens directly) ──────────────────
+        # Stream resumed agent (yield tokens directly)
         assistant_response = ""
         stream_error = False
         try:
@@ -492,7 +491,7 @@ async def chat_resume(req: ResumeRequest, request: Request):
         if stream_error:
             return
 
-        # ── Check for chained interrupts ─────────────────────────────────────
+        # Check for chained interrupts
         # The agent may chain multiple send_email calls; each needs approval.
         try:
             state = await agent.aget_state(config)
